@@ -1,0 +1,15 @@
+services:
+  lia:
+    build: .
+    image: lia:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      # ./token.json:/app/token.json:ro  # se agrega en la Fase 1 (OAuth de Google)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
