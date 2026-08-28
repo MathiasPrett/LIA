@@ -1,4 +1,5 @@
 import datetime as dt
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -7,6 +8,8 @@ from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import Resource, build
+
+logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
@@ -44,7 +47,13 @@ def load_credentials(token_path: Path) -> Credentials:
                 "El acceso a Google Calendar expiró o fue revocado. Ejecuta "
                 "`uv run python scripts/google_auth.py` de nuevo para reconectarlo."
             ) from exc
-        token_path.write_text(creds.to_json())
+        try:
+            token_path.write_text(creds.to_json())
+        except OSError:
+            # El token ya está refrescado en memoria y sirve igual; si el archivo está
+            # montado de solo lectura (como en Docker, a propósito), simplemente no
+            # queda cacheado en disco y se vuelve a refrescar en la próxima llamada.
+            logger.warning("No se pudo guardar el token refrescado en %s (¿solo lectura?)", token_path)
 
     return creds
 
