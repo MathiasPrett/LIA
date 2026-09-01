@@ -21,3 +21,14 @@ uv run pytest
 ```bash
 docker compose up --build
 ```
+
+## Desplegar a producción (Raspberry Pi)
+
+Después de pushear los cambios:
+
+```bash
+git push
+./scripts/deploy.sh
+```
+
+El script se conecta por SSH a la Pi, hace `git pull`, reconstruye la imagen y reinicia el contenedor. Usa `PI_HOST`/`PI_PATH` como variables de entorno si la IP o la ruta cambian (por defecto `mathias@192.168.100.251` y `~/Docker/LIA`).

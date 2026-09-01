@@ -97,7 +97,7 @@ El LLM recibe el schema de estas funciones y decide cuáles llamar. Las de **lec
 ### Autenticación de cada integración
 
 - **Telegram:** `TELEGRAM_BOT_TOKEN` de @BotFather. Allowlist con tu `user_id` numérico aplicada como filtro global — cualquier otro chat recibe silencio o un "no autorizado".
-- **Google (Calendar + Gmail):** OAuth 2.0 *desktop flow*, ejecutado **una vez en tu laptop** (necesita navegador). Genera `token.json` con refresh token; ese archivo se monta en el contenedor como volumen read-only. *Una service account NO sirve* para un Google personal sin Workspace. Scopes: `calendar.events` (lectura/escritura) y `gmail.readonly`.
+- **Google (Calendar + Tasks):** OAuth 2.0 *desktop flow*, ejecutado **una vez en tu laptop** (necesita navegador). Genera `token.json` con refresh token; ese archivo se monta en el contenedor como volumen read-only. *Una service account NO sirve* para un Google personal sin Workspace. Scopes: `calendar.events` (lectura/escritura) y `tasks` (Fase 7). Gmail quedó descartado (ver Fase 5), así que ese scope nunca se agregó.
 - **Canvas:** token de acceso personal generado desde `Cuenta → Configuración → Nuevo token de acceso`. Header `Authorization: Bearer <token>`. Sin OAuth.
 - **Groq (Whisper):** API key gratuita, tier gratis generoso.
 - **Open-Meteo:** sin API key.
@@ -143,12 +143,29 @@ Resumen semanal (domingo 20:00), recordatorios pre-evento con heurística de "im
 Open-Meteo, recordatorios ad-hoc por lenguaje natural, y notas de voz: Telegram voice → OGG → Groq Whisper → mismo pipeline que un mensaje de texto.
 **Criterio de término:** le mandas un audio y hace lo que le pediste.
 
-**Gmail queda pendiente para más adelante** (no urge ni interesa por ahora) — cuando se retome, es el mismo patrón que Canvas: cliente de lectura + triage con el LLM.
+**Gmail: descartado** — decisión del usuario, no se retoma salvo que lo pida explícitamente (antes decía "pendiente para más adelante"; ya no es un "después", es un "no, a menos que se pida").
 
 ### Fase 6 — Endurecimiento
 Healthcheck en compose + `restart: unless-stopped`, logging rotativo, backup del SQLite a cron, alerta a ti mismo si el presupuesto de tokens supera un umbral, manejo de expiración del refresh token de Google.
 
 **Estado: código completo, pendiente de probar en la Pi real** (sin Docker en el entorno de desarrollo). Detalle de qué se implementó y por qué en `CLAUDE.md` § Estado.
+
+### Fase 7 — Google Tasks, tipos de entrada y colores por categoría
+Se agregó el scope `tasks` (Google Tasks API) junto al de Calendar en el mismo `token.json` — **requiere rehacer el OAuth una vez** (`uv run python scripts/google_auth.py` de nuevo, y recopiar `token.json` a la Pi) para que el token tenga el permiso nuevo.
+
+El LLM ahora distingue tres tipos de cosas para guardar, cada una con su propia herramienta:
+- **Evento** (`crear_evento`): horario concreto, como antes.
+- **Tarea** (`crear_tarea`): pendiente sin horario fijo, va a Google Tasks (aparece en la lista de tareas de Calendar), no al calendario de eventos.
+- **Cumpleaños** (`crear_cumpleanos`): entrada `eventType: birthday` de la API de Calendar — todo el día, recurrencia anual automática, forzada al calendario `primary` (restricción de la propia API de Google, no se puede elegir otro calendario).
+
+Los eventos normales (`crear_evento`) ahora aceptan una `categoria` opcional que colorea el evento automáticamente en Calendar (`colorId`), usando la paleta fija de 11 colores de Google:
+- académico → Peacock (7)
+- personal → Sage (2)
+- social → Tangerine (6)
+- salud → Tomato (11)
+- viajes → Blueberry (9)
+
+**Estado: implementado y con tests, pendiente de probar en vivo** (necesita que el usuario rehaga el OAuth con el scope nuevo antes de que `crear_tarea`/`crear_cumpleanos` funcionen).
 
 ---
 
@@ -189,7 +206,7 @@ Estimación con uso realista (resumen diario, resumen semanal, ~10 mensajes de c
 ## Ideas adicionales de integración (backlog, no comprometidas)
 
 - **Transporte:** Google Maps Directions con tráfico en vivo → "sal ahora, hay 20 min de atraso".
-- **Cumpleaños/contactos:** Google People API → aviso el día anterior.
+- **Cumpleaños/contactos:** Google People API → aviso el día anterior. *(Parcialmente cubierto en Fase 7: ya se puede guardar un cumpleaños a pedido vía `crear_cumpleanos`. Lo que falta es la parte proactiva — detectarlos automáticamente desde People API y avisar el día anterior; además, los cumpleaños son eventos de todo el día y `is_important`/`services/reminders.py` excluye a propósito los eventos de todo el día, así que ni siquiera el recordatorio pre-evento genérico los agarra hoy.)*
 - **Hábitos:** tracking simple en SQLite, pregunta al final del día ("¿estudiaste hoy?"), gráfico semanal.
 - **Finanzas locales:** `mindicador.cl` (UF, dólar, UTM) — gratis, sin key.
 - **RSS/newsletters:** resumen de 3 bullets de tus fuentes en el brief matutino.
@@ -200,6 +217,8 @@ Estimación con uso realista (resumen diario, resumen semanal, ~10 mensajes de c
 - **Reparto de horas por deadline:** dado un conjunto de entregas próximas, sugerir cuántas horas por día conviene destinarle a cada una según lo que falta. Extensión natural de `planner.py` (Fase 4).
 - **Check-in diario liviano:** a la mañana pregunta "¿en qué vas a avanzar hoy?", a la noche pregunta si se cumplió — historial simple de foco/cumplimiento (se cruza bien con la "Retro semanal" de arriba).
 - **Salud de la propia infraestructura:** como el bot corre 24/7 en la Raspberry Pi, avisar si se queda sin espacio en disco, se cae el contenedor, o el refresh token de Google expira — para no descubrirlo recién cuando deja de mandar el resumen diario. Natural para la Fase 6 (Endurecimiento).
+- **`eliminar_evento`** (requiere confirmación, mismo patrón que `crear_evento`): agregar `delete_event`/`remove_event` en `google_calendar.py` (`service.events().delete(...)`, mismo patrón que `create_event`/`insert_event`); exponer `id` y `calendario` en `_event_to_dict` (hoy no viajan, hace falta para que el LLM pueda referenciar qué evento borrar después de un `listar_eventos`); el tool necesita `titulo`/`inicio` además del id solo para armar un `confirmation_summary` legible (no para el borrado en sí).
+- **Ignorar curso de Canvas** (decisión ya tomada: por curso completo, no por tarea puntual — Canvas no expone un id estable por assignment, solo `course_name` + `title`): tabla nueva en `db.py` tipo `IgnoredCanvasCourse(id, course_name, created_at)` (no usar `Preference`, que es solo get/set de un valor escalar, sin semántica de lista — ver `services/preferences.py`); tool `ignorar_curso_canvas(curso)` sin confirmación (reversible); filtrar por `course_name` en `canvas_watcher.find_new_items` y en el tool `canvas_tareas_pendientes`; falta también el reverso (`dejar_de_ignorar_curso_canvas`).
 
 ---
 

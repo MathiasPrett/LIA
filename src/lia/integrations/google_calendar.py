@@ -11,7 +11,28 @@ from googleapiclient.discovery import Resource, build
 
 logger = logging.getLogger(__name__)
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/tasks",
+]
+
+# Categorías inventadas para colorear eventos automáticamente. IDs según la paleta
+# fija de Google Calendar (Colors.get(), siempre la misma para todas las cuentas):
+# 1 Lavender, 2 Sage, 3 Grape, 4 Flamingo, 5 Banana, 6 Tangerine, 7 Peacock,
+# 8 Graphite, 9 Blueberry, 10 Basil, 11 Tomato.
+CATEGORY_COLORS: dict[str, str] = {
+    "academico": "7",  # Peacock — clases, certámenes, entregas
+    "personal": "2",  # Sage — trámites, tiempo propio
+    "social": "6",  # Tangerine — juntas, salidas, eventos con otras personas
+    "salud": "11",  # Tomato — citas médicas, deporte
+    "viajes": "9",  # Blueberry — vuelos, viajes
+}
+
+
+def color_id_for_category(categoria: str | None) -> str | None:
+    if categoria is None:
+        return None
+    return CATEGORY_COLORS.get(categoria)
 
 
 class CalendarNotConnected(Exception):
@@ -130,6 +151,7 @@ def create_event(
     timezone: str,
     location: str | None = None,
     description: str | None = None,
+    color_id: str | None = None,
 ) -> CalendarEvent:
     body = {
         "summary": summary,
@@ -140,6 +162,8 @@ def create_event(
         body["location"] = location
     if description:
         body["description"] = description
+    if color_id:
+        body["colorId"] = color_id
 
     created = service.events().insert(calendarId=calendar_id, body=body).execute()
     return _parse_event(created, calendar_id)
@@ -154,11 +178,42 @@ def insert_event(
     timezone: str,
     location: str | None = None,
     description: str | None = None,
+    color_id: str | None = None,
 ) -> CalendarEvent:
     """Atajo síncrono equivalente a `fetch_events` pero para crear un evento."""
     creds = load_credentials(token_path)
     service = build_service(creds)
-    return create_event(service, calendar_id, summary, start, end, timezone, location, description)
+    return create_event(service, calendar_id, summary, start, end, timezone, location, description, color_id)
+
+
+def create_birthday_event(service: Resource, summary: str, date: dt.date) -> CalendarEvent:
+    """Crea un evento de tipo 'birthday': todo el día, se repite cada año, siempre en
+    el calendario 'primary' (restricción de la API de Google, no se puede elegir otro)."""
+    end_date = date + dt.timedelta(days=1)
+    recurrence = (
+        "RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1"
+        if date.month == 2 and date.day == 29
+        else "RRULE:FREQ=YEARLY"
+    )
+    body = {
+        "summary": summary,
+        "eventType": "birthday",
+        "start": {"date": date.isoformat()},
+        "end": {"date": end_date.isoformat()},
+        "recurrence": [recurrence],
+        "visibility": "private",
+        "transparency": "transparent",
+        "birthdayProperties": {"type": "birthday"},
+    }
+    created = service.events().insert(calendarId="primary", body=body).execute()
+    return _parse_event(created, "primary")
+
+
+def insert_birthday(token_path: Path, summary: str, date: dt.date) -> CalendarEvent:
+    """Atajo síncrono equivalente a `insert_event` pero para un cumpleaños."""
+    creds = load_credentials(token_path)
+    service = build_service(creds)
+    return create_birthday_event(service, summary, date)
 
 
 def fetch_events(

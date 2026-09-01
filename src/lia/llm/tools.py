@@ -7,12 +7,20 @@ from sqlalchemy.orm import sessionmaker
 from lia.config import Settings
 from lia.db import Reminder
 from lia.integrations.canvas import fetch_activity_items, fetch_pending_assignments
-from lia.integrations.google_calendar import fetch_events, insert_event
+from lia.integrations.google_calendar import CATEGORY_COLORS, color_id_for_category, fetch_events, insert_birthday, insert_event
+from lia.integrations.google_tasks import insert_task
 from lia.integrations.weather import WeatherError, fetch_daily_forecast
 from lia.llm.registry import Tool, ToolRegistry
 from lia.services.planner import find_free_slots
 
 _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_CATEGORY_EMOJI = {
+    "academico": "🎓",
+    "personal": "🏠",
+    "social": "👥",
+    "salud": "🏥",
+    "viajes": "✈️",
+}
 
 
 def _event_to_dict(event) -> dict:
@@ -74,10 +82,12 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
         ubicacion: str | None = None,
         descripcion: str | None = None,
         calendario: str | None = None,
+        categoria: str | None = None,
     ) -> dict:
         start = dt.datetime.fromisoformat(inicio)
         end = dt.datetime.fromisoformat(fin)
         calendar_id = calendario if calendario in settings.calendar_id_list else "primary"
+        color_id = color_id_for_category(categoria)
         event = await asyncio.to_thread(
             insert_event,
             settings.google_token_path,
@@ -88,6 +98,7 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
             settings.timezone,
             ubicacion,
             descripcion,
+            color_id,
         )
         return _event_to_dict(event)
 
@@ -106,15 +117,21 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
         calendario = args.get("calendario")
         if calendario and calendario != "primary":
             line += f"\n🗓️ {calendar_labels.get(calendario, calendario)}"
+        categoria = args.get("categoria")
+        if categoria in CATEGORY_COLORS:
+            line += f"\n{_CATEGORY_EMOJI.get(categoria, '🏷️')} {categoria}"
         return line
 
     registry.register(
         Tool(
             name="crear_evento",
             description=(
-                "Crea un evento nuevo en el calendario. Por defecto va al calendario personal "
+                "Crea un evento normal en el calendario, con horario de inicio y fin concretos "
+                "(reuniones, clases, citas, salidas). Por defecto va al calendario personal "
                 "('primary'); usá el parámetro calendario solo si el usuario pide explícitamente "
-                "agregarlo a otro de los calendarios disponibles."
+                "agregarlo a otro de los calendarios disponibles. No uses esta herramienta para "
+                "pendientes sin horario fijo (usá crear_tarea) ni para cumpleaños (usá "
+                "crear_cumpleanos)."
             ),
             parameters={
                 "type": "object",
@@ -139,12 +156,97 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
                         ),
                         "enum": settings.calendar_id_list,
                     },
+                    "categoria": {
+                        "type": "string",
+                        "description": (
+                            "Categoría del evento, para colorearlo automáticamente en el calendario "
+                            "(opcional — si no encaja claramente en ninguna, omitila)."
+                        ),
+                        "enum": list(CATEGORY_COLORS.keys()),
+                    },
                 },
                 "required": ["titulo", "inicio", "fin"],
             },
             handler=crear_evento,
             requires_confirmation=True,
             confirmation_summary=_crear_evento_summary,
+        )
+    )
+
+    async def crear_tarea(titulo: str, fecha: str | None = None, notas: str | None = None) -> dict:
+        due = dt.date.fromisoformat(fecha) if fecha else None
+        task = await asyncio.to_thread(insert_task, settings.google_token_path, titulo, notas, due)
+        return {"titulo": task.title, "fecha": task.due.isoformat() if task.due else None, "notas": task.notes}
+
+    def _crear_tarea_summary(args: dict) -> str:
+        line = f"✅ {args['titulo']}"
+        if args.get("fecha"):
+            fecha = dt.date.fromisoformat(args["fecha"])
+            line += f"\n🗓️ Vence el {fecha.strftime('%d/%m')}"
+        if args.get("notas"):
+            line += f"\n📝 {args['notas']}"
+        return line
+
+    registry.register(
+        Tool(
+            name="crear_tarea",
+            description=(
+                "Crea una tarea (pendiente sin horario fijo) en Google Tasks — aparece en la lista "
+                "de tareas de Google Calendar. Usala para pendientes tipo 'comprar tal cosa' o "
+                "'entregar tal informe', no para algo con una hora concreta (para eso es "
+                "crear_evento). La fecha, si se da, es solo el día — Google Tasks no guarda horas."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "titulo": {"type": "string"},
+                    "fecha": {
+                        "type": "string",
+                        "description": "Fecha límite en ISO 8601 (YYYY-MM-DD), opcional — sin hora",
+                    },
+                    "notas": {"type": "string", "description": "Detalles adicionales (opcional)"},
+                },
+                "required": ["titulo"],
+            },
+            handler=crear_tarea,
+            requires_confirmation=True,
+            confirmation_summary=_crear_tarea_summary,
+        )
+    )
+
+    async def crear_cumpleanos(nombre: str, fecha: str) -> dict:
+        date = dt.date.fromisoformat(fecha)
+        event = await asyncio.to_thread(
+            insert_birthday, settings.google_token_path, f"Cumpleaños de {nombre}", date
+        )
+        return _event_to_dict(event)
+
+    def _crear_cumpleanos_summary(args: dict) -> str:
+        fecha = dt.date.fromisoformat(args["fecha"])
+        return f"🎂 Cumpleaños de {args['nombre']}\n🗓️ {fecha.strftime('%d/%m')}, se repite todos los años"
+
+    registry.register(
+        Tool(
+            name="crear_cumpleanos",
+            description=(
+                "Agrega un cumpleaños al calendario principal. No es un evento normal: es una "
+                "entrada de todo el día que se repite automáticamente cada año, sin horario. "
+                "Usala cuando el usuario pida guardar o recordar la fecha de nacimiento de alguien."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "nombre": {"type": "string", "description": "Nombre de la persona"},
+                    "fecha": {
+                        "type": "string",
+                        "description": "Fecha de nacimiento en ISO 8601 (YYYY-MM-DD), el año puede ser aproximado",
+                    },
+                },
+                "required": ["nombre", "fecha"],
+            },
+            handler=crear_cumpleanos,
+            requires_confirmation=True,
+            confirmation_summary=_crear_cumpleanos_summary,
         )
     )
 
