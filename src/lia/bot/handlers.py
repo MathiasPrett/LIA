@@ -3,6 +3,7 @@ import datetime as dt
 import logging
 from zoneinfo import ZoneInfo
 
+from googleapiclient.errors import HttpError
 from telegram import Update
 from telegram.ext import ContextTypes, filters
 
@@ -199,6 +200,27 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.exception("Encima falló el aviso de error al usuario")
 
 
+def describe_tool_error(exc: Exception) -> str:
+    """Traduce el error de una herramienta a algo que le sirva al usuario (y al LLM)."""
+    if isinstance(exc, CalendarNotConnected):
+        return str(exc)
+    if isinstance(exc, HttpError):
+        status = getattr(exc.resp, "status", None)
+        if status == 404:
+            return (
+                "ese evento ya no está en el calendario (o el identificador que tenía quedó "
+                "viejo). Pregúntame de nuevo por tu agenda para que lo busque otra vez."
+            )
+        if status == 403:
+            return (
+                "Google no me deja escribir ahí. Puede ser un calendario de solo lectura "
+                "(por ejemplo uno suscrito) o una API que falta habilitar en el proyecto."
+            )
+        if status in (401, 400):
+            return "Google rechazó la petición. Puede que el acceso haya expirado."
+    return "hubo un error inesperado al aplicar el cambio."
+
+
 async def confirmar_accion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.bot_data["settings"]
     query = update.callback_query
@@ -229,17 +251,21 @@ async def confirmar_accion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     tool = tools.get(tool_name)
 
     try:
-        result = await tool.handler(**pending.arguments)
-    except Exception:
+        await tool.handler(**pending.arguments)
+    except Exception as exc:
         logger.exception("Falló la ejecución de %s tras confirmar", tool_name)
-        await query.edit_message_text("Algo falló al aplicar el cambio en el calendario. Intenta de nuevo.")
+        detalle = describe_tool_error(exc)
+        # Queda en el historial para que el LLM sepa que NO se aplicó: si no, al
+        # pedirle "continúa" vuelve a proponer lo mismo con datos inventados.
+        with session_factory() as session:
+            save_turn(session, "assistant", f"[Falló {tool_name}, no se aplicó nada: {detalle}]")
+        await edit_formatted(query, f"❌ No pude aplicarlo: {detalle}")
         return
 
+    # El resumen ya describe la acción concreta (crear, editar, eliminar…), así que
+    # sirve tal cual como registro; el texto genérico anterior mentía en todo lo que
+    # no fuera crear un evento.
     with session_factory() as session:
-        save_turn(
-            session,
-            "assistant",
-            f"Evento creado: {result.get('titulo')} ({result.get('inicio')} - {result.get('fin')}).",
-        )
+        save_turn(session, "assistant", f"[Aplicado {tool_name}]\n{pending.summary}")
 
-    await edit_formatted(query, f"✅ Listo, agendado:\n{pending.summary}")
+    await edit_formatted(query, f"✅ Listo:\n{pending.summary}")

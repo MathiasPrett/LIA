@@ -139,9 +139,9 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
             description=(
                 "Crea un evento normal en el calendario, con horario de inicio y fin concretos "
                 "(reuniones, clases, citas, salidas). Por defecto va al calendario personal "
-                "('primary'); usá el parámetro calendario solo si el usuario pide explícitamente "
+                "('primary'); usa el parámetro calendario solo si el usuario pide explícitamente "
                 "agregarlo a otro de los calendarios disponibles. No uses esta herramienta para "
-                "pendientes sin horario fijo (usá crear_tarea) ni para cumpleaños (usá "
+                "pendientes sin horario fijo (usa crear_tarea) ni para cumpleaños (usa "
                 "crear_cumpleanos)."
             ),
             parameters={
@@ -171,7 +171,7 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
                         "type": "string",
                         "description": (
                             "Categoría del evento, para colorearlo automáticamente en el calendario "
-                            "(opcional — si no encaja claramente en ninguna, omitila)."
+                            "(opcional — si no encaja claramente en ninguna, omítela)."
                         ),
                         "enum": list(CATEGORY_COLORS.keys()),
                     },
@@ -200,7 +200,7 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
         Tool(
             name="eliminar_evento",
             description=(
-                "Borra un evento del calendario. Primero usá listar_eventos para encontrar el "
+                "Borra un evento del calendario. Primero usa listar_eventos para encontrar el "
                 "evento (necesitás su 'id' y 'calendario' exactos, que vienen en el resultado); "
                 "titulo e inicio son solo para mostrarle al usuario qué se va a borrar antes de "
                 "confirmar."
@@ -275,8 +275,8 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
             name="editar_evento",
             description=(
                 "Modifica uno o más campos de un evento existente (título, horario, lugar, "
-                "descripción, categoría). Primero usá listar_eventos para encontrar el evento "
-                "('id' y 'calendario'); pasá solo los campos nuevos que cambian, dejá el resto sin "
+                "descripción, categoría). Primero usa listar_eventos para encontrar el evento "
+                "('id' y 'calendario'); pasa solo los campos nuevos que cambian, deja el resto sin "
                 "especificar. titulo_actual es solo para la confirmación."
             ),
             parameters={
@@ -329,7 +329,7 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
             name="crear_tarea",
             description=(
                 "Crea una tarea (pendiente sin horario fijo) en Google Tasks — aparece en la lista "
-                "de tareas de Google Calendar. Usala para pendientes tipo 'comprar tal cosa' o "
+                "de tareas de Google Calendar. Úsala para pendientes tipo 'comprar tal cosa' o "
                 "'entregar tal informe', no para algo con una hora concreta (para eso es "
                 "crear_evento). La fecha, si se da, es solo el día — Google Tasks no guarda horas."
             ),
@@ -368,7 +368,7 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
             description=(
                 "Agrega un cumpleaños al calendario principal. No es un evento normal: es una "
                 "entrada de todo el día que se repite automáticamente cada año, sin horario. "
-                "Usala cuando el usuario pida guardar o recordar la fecha de nacimiento de alguien."
+                "Úsala cuando el usuario pida guardar o recordar la fecha de nacimiento de alguien."
             ),
             parameters={
                 "type": "object",
@@ -424,7 +424,7 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
         Tool(
             name="ignorar_curso_canvas",
             description=(
-                "Deja de notificar tareas y novedades de un curso de Canvas. Usá el nombre del "
+                "Deja de notificar tareas y novedades de un curso de Canvas. Usa el nombre del "
                 "curso exactamente como aparece en 'curso' en los resultados de "
                 "canvas_tareas_pendientes o canvas_novedades. Se aplica directo, sin confirmación "
                 "(es reversible con dejar_de_ignorar_curso_canvas)."
