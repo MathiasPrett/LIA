@@ -216,6 +216,68 @@ def insert_birthday(token_path: Path, summary: str, date: dt.date) -> CalendarEv
     return create_birthday_event(service, summary, date)
 
 
+def delete_event(service: Resource, calendar_id: str, event_id: str) -> None:
+    service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+
+
+def remove_event(token_path: Path, calendar_id: str, event_id: str) -> None:
+    """Atajo síncrono equivalente a `insert_event` pero para borrar un evento."""
+    creds = load_credentials(token_path)
+    service = build_service(creds)
+    delete_event(service, calendar_id, event_id)
+
+
+def update_event(
+    service: Resource,
+    calendar_id: str,
+    event_id: str,
+    summary: str | None = None,
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+    timezone: str | None = None,
+    location: str | None = None,
+    description: str | None = None,
+    color_id: str | None = None,
+) -> CalendarEvent:
+    """Actualización parcial (patch): solo se tocan los campos que no son None."""
+    body = {}
+    if summary is not None:
+        body["summary"] = summary
+    if start is not None:
+        body["start"] = {"dateTime": start.isoformat(), "timeZone": timezone}
+    if end is not None:
+        body["end"] = {"dateTime": end.isoformat(), "timeZone": timezone}
+    if location is not None:
+        body["location"] = location
+    if description is not None:
+        body["description"] = description
+    if color_id is not None:
+        body["colorId"] = color_id
+
+    updated = service.events().patch(calendarId=calendar_id, eventId=event_id, body=body).execute()
+    return _parse_event(updated, calendar_id)
+
+
+def modify_event(
+    token_path: Path,
+    calendar_id: str,
+    event_id: str,
+    summary: str | None = None,
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+    timezone: str | None = None,
+    location: str | None = None,
+    description: str | None = None,
+    color_id: str | None = None,
+) -> CalendarEvent:
+    """Atajo síncrono equivalente a `insert_event` pero para editar un evento existente."""
+    creds = load_credentials(token_path)
+    service = build_service(creds)
+    return update_event(
+        service, calendar_id, event_id, summary, start, end, timezone, location, description, color_id
+    )
+
+
 def fetch_events(
     token_path: Path,
     time_min: dt.datetime,

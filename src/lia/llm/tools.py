@@ -7,10 +7,19 @@ from sqlalchemy.orm import sessionmaker
 from lia.config import Settings
 from lia.db import Reminder
 from lia.integrations.canvas import fetch_activity_items, fetch_pending_assignments
-from lia.integrations.google_calendar import CATEGORY_COLORS, color_id_for_category, fetch_events, insert_birthday, insert_event
+from lia.integrations.google_calendar import (
+    CATEGORY_COLORS,
+    color_id_for_category,
+    fetch_events,
+    insert_birthday,
+    insert_event,
+    modify_event,
+    remove_event,
+)
 from lia.integrations.google_tasks import insert_task
 from lia.integrations.weather import WeatherError, fetch_daily_forecast
 from lia.llm.registry import Tool, ToolRegistry
+from lia.services.canvas_ignore import ignore_course, list_ignored_courses, unignore_course
 from lia.services.planner import find_free_slots
 
 _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
@@ -25,6 +34,8 @@ _CATEGORY_EMOJI = {
 
 def _event_to_dict(event) -> dict:
     return {
+        "id": event.id,
+        "calendario": event.calendar_id,
         "titulo": event.summary,
         "inicio": event.start.isoformat(),
         "fin": event.end.isoformat(),
@@ -173,6 +184,132 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
         )
     )
 
+    async def eliminar_evento(evento_id: str, calendario: str, titulo: str, inicio: str) -> dict:
+        await asyncio.to_thread(remove_event, settings.google_token_path, calendario, evento_id)
+        return {"eliminado": True, "titulo": titulo}
+
+    def _eliminar_evento_summary(args: dict) -> str:
+        start = dt.datetime.fromisoformat(args["inicio"])
+        dia = _DIAS[start.weekday()]
+        return (
+            f"🗑️ Eliminar: {args['titulo']}\n"
+            f"🕐 {dia} {start.strftime('%d/%m')}, {start.strftime('%H:%M')}"
+        )
+
+    registry.register(
+        Tool(
+            name="eliminar_evento",
+            description=(
+                "Borra un evento del calendario. Primero usá listar_eventos para encontrar el "
+                "evento (necesitás su 'id' y 'calendario' exactos, que vienen en el resultado); "
+                "titulo e inicio son solo para mostrarle al usuario qué se va a borrar antes de "
+                "confirmar."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "evento_id": {"type": "string", "description": "Campo 'id' del evento, de listar_eventos"},
+                    "calendario": {"type": "string", "description": "Campo 'calendario' del evento, de listar_eventos"},
+                    "titulo": {"type": "string", "description": "Título actual del evento, para la confirmación"},
+                    "inicio": {"type": "string", "description": "Inicio actual del evento (ISO 8601), para la confirmación"},
+                },
+                "required": ["evento_id", "calendario", "titulo", "inicio"],
+            },
+            handler=eliminar_evento,
+            requires_confirmation=True,
+            confirmation_summary=_eliminar_evento_summary,
+        )
+    )
+
+    async def editar_evento(
+        evento_id: str,
+        calendario: str,
+        titulo_actual: str,
+        nuevo_titulo: str | None = None,
+        nuevo_inicio: str | None = None,
+        nuevo_fin: str | None = None,
+        nueva_ubicacion: str | None = None,
+        nueva_descripcion: str | None = None,
+        categoria: str | None = None,
+    ) -> dict:
+        start = dt.datetime.fromisoformat(nuevo_inicio) if nuevo_inicio else None
+        end = dt.datetime.fromisoformat(nuevo_fin) if nuevo_fin else None
+        color_id = color_id_for_category(categoria)
+        event = await asyncio.to_thread(
+            modify_event,
+            settings.google_token_path,
+            calendario,
+            evento_id,
+            nuevo_titulo,
+            start,
+            end,
+            settings.timezone,
+            nueva_ubicacion,
+            nueva_descripcion,
+            color_id,
+        )
+        return _event_to_dict(event)
+
+    def _editar_evento_summary(args: dict) -> str:
+        line = f"✏️ Editar: {args['titulo_actual']}"
+        if args.get("nuevo_titulo"):
+            line += f"\n📝 Nuevo título: {args['nuevo_titulo']}"
+        if args.get("nuevo_inicio"):
+            start = dt.datetime.fromisoformat(args["nuevo_inicio"])
+            dia = _DIAS[start.weekday()]
+            hora = f", {start.strftime('%H:%M')}"
+            if args.get("nuevo_fin"):
+                hora += f"–{dt.datetime.fromisoformat(args['nuevo_fin']).strftime('%H:%M')}"
+            line += f"\n🕐 Nuevo horario: {dia} {start.strftime('%d/%m')}{hora}"
+        if args.get("nueva_ubicacion"):
+            line += f"\n📍 Nuevo lugar: {args['nueva_ubicacion']}"
+        if args.get("nueva_descripcion"):
+            line += f"\n📝 Nueva descripción: {args['nueva_descripcion']}"
+        categoria = args.get("categoria")
+        if categoria in CATEGORY_COLORS:
+            line += f"\n{_CATEGORY_EMOJI.get(categoria, '🏷️')} {categoria}"
+        return line
+
+    registry.register(
+        Tool(
+            name="editar_evento",
+            description=(
+                "Modifica uno o más campos de un evento existente (título, horario, lugar, "
+                "descripción, categoría). Primero usá listar_eventos para encontrar el evento "
+                "('id' y 'calendario'); pasá solo los campos nuevos que cambian, dejá el resto sin "
+                "especificar. titulo_actual es solo para la confirmación."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "evento_id": {"type": "string", "description": "Campo 'id' del evento, de listar_eventos"},
+                    "calendario": {"type": "string", "description": "Campo 'calendario' del evento, de listar_eventos"},
+                    "titulo_actual": {"type": "string", "description": "Título actual del evento, para la confirmación"},
+                    "nuevo_titulo": {"type": "string", "description": "Nuevo título (opcional)"},
+                    "nuevo_inicio": {
+                        "type": "string",
+                        "description": "Nueva fecha/hora de inicio en ISO 8601 con offset de zona horaria (opcional)",
+                    },
+                    "nuevo_fin": {
+                        "type": "string",
+                        "description": "Nueva fecha/hora de término en ISO 8601 con offset de zona horaria (opcional)",
+                    },
+                    "nueva_ubicacion": {"type": "string", "description": "Nuevo lugar (opcional)"},
+                    "nueva_descripcion": {"type": "string", "description": "Nueva descripción (opcional)"},
+                    "categoria": {
+                        "type": "string",
+                        "description": "Nueva categoría, para recolorear el evento (opcional)",
+                        "enum": list(CATEGORY_COLORS.keys()),
+                    },
+                },
+                "required": ["evento_id", "calendario", "titulo_actual"],
+            },
+            handler=editar_evento,
+            requires_confirmation=True,
+            confirmation_summary=_editar_evento_summary,
+        )
+    )
+
     async def crear_tarea(titulo: str, fecha: str | None = None, notas: str | None = None) -> dict:
         due = dt.date.fromisoformat(fecha) if fecha else None
         task = await asyncio.to_thread(insert_task, settings.google_token_path, titulo, notas, due)
@@ -252,6 +389,8 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
 
     async def canvas_tareas_pendientes() -> dict:
         assignments = await fetch_pending_assignments(settings.canvas_base_url, settings.canvas_access_token)
+        with session_factory() as session:
+            ignorados = set(list_ignored_courses(session))
         return {
             "tareas": [
                 {
@@ -260,15 +399,73 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
                     "vence": a.due_at.isoformat() if a.due_at else None,
                 }
                 for a in assignments
+                if a.course_name not in ignorados
             ]
         }
 
     registry.register(
         Tool(
             name="canvas_tareas_pendientes",
-            description="Lista las tareas/entregas pendientes en Canvas, ordenadas por fecha de vencimiento.",
+            description=(
+                "Lista las tareas/entregas pendientes en Canvas, ordenadas por fecha de "
+                "vencimiento. No incluye cursos que el usuario haya pedido ignorar."
+            ),
             parameters={"type": "object", "properties": {}},
             handler=canvas_tareas_pendientes,
+        )
+    )
+
+    async def ignorar_curso_canvas(curso: str) -> dict:
+        with session_factory() as session:
+            ignore_course(session, curso)
+        return {"curso": curso, "ignorado": True}
+
+    registry.register(
+        Tool(
+            name="ignorar_curso_canvas",
+            description=(
+                "Deja de notificar tareas y novedades de un curso de Canvas. Usá el nombre del "
+                "curso exactamente como aparece en 'curso' en los resultados de "
+                "canvas_tareas_pendientes o canvas_novedades. Se aplica directo, sin confirmación "
+                "(es reversible con dejar_de_ignorar_curso_canvas)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"curso": {"type": "string", "description": "Nombre exacto del curso a ignorar"}},
+                "required": ["curso"],
+            },
+            handler=ignorar_curso_canvas,
+        )
+    )
+
+    async def dejar_de_ignorar_curso_canvas(curso: str) -> dict:
+        with session_factory() as session:
+            existia = unignore_course(session, curso)
+        return {"curso": curso, "ignorado": False, "existia": existia}
+
+    registry.register(
+        Tool(
+            name="dejar_de_ignorar_curso_canvas",
+            description="Vuelve a notificar tareas y novedades de un curso de Canvas que estaba ignorado.",
+            parameters={
+                "type": "object",
+                "properties": {"curso": {"type": "string", "description": "Nombre exacto del curso a dejar de ignorar"}},
+                "required": ["curso"],
+            },
+            handler=dejar_de_ignorar_curso_canvas,
+        )
+    )
+
+    async def listar_cursos_ignorados_canvas() -> dict:
+        with session_factory() as session:
+            return {"cursos": list_ignored_courses(session)}
+
+    registry.register(
+        Tool(
+            name="listar_cursos_ignorados_canvas",
+            description="Lista los cursos de Canvas que el usuario pidió dejar de notificar.",
+            parameters={"type": "object", "properties": {}},
+            handler=listar_cursos_ignorados_canvas,
         )
     )
 

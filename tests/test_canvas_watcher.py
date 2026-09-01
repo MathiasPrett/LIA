@@ -2,17 +2,18 @@ import datetime as dt
 
 from lia.db import make_engine, make_session_factory
 from lia.integrations.canvas import CanvasActivityItem
+from lia.services.canvas_ignore import ignore_course
 from lia.services.canvas_watcher import find_new_items
 
 TZ = dt.timezone.utc
 
 
-def _item(key: str, title: str) -> CanvasActivityItem:
+def _item(key: str, title: str, course_name: str = "Diseño Detallado de Software") -> CanvasActivityItem:
     return CanvasActivityItem(
         key=key,
         kind="Announcement",
         title=title,
-        course_name="Diseño Detallado de Software",
+        course_name=course_name,
         updated_at=dt.datetime(2026, 8, 27, 10, 0, tzinfo=TZ),
         html_url="https://canvas.example.com/x",
     )
@@ -74,3 +75,22 @@ def test_running_twice_in_a_row_never_duplicates():
 
     assert first_poll == []
     assert second_poll == []
+
+
+def test_ignored_course_items_are_not_returned_but_still_marked_seen():
+    session_factory = _session_factory()
+    first_batch = [_item("Announcement:1", "Aviso 1", course_name="Cálculo III")]
+
+    with session_factory() as session:
+        find_new_items(session, first_batch)  # backfill
+        ignore_course(session, "Cálculo III")
+
+    second_batch = [
+        _item("Announcement:1", "Aviso 1", course_name="Cálculo III"),
+        _item("Announcement:2", "Aviso nuevo ignorado", course_name="Cálculo III"),
+        _item("Announcement:3", "Aviso nuevo normal", course_name="Otro curso"),
+    ]
+    with session_factory() as session:
+        new_items = find_new_items(session, second_batch)
+
+    assert [i.key for i in new_items] == ["Announcement:3"]

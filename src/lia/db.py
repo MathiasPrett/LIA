@@ -66,6 +66,16 @@ class Preference(Base):
     value: Mapped[str] = mapped_column(Text)
 
 
+class IgnoredCanvasCourse(Base):
+    """Cursos de Canvas cuyas novedades/tareas el usuario pidió dejar de notificar."""
+
+    __tablename__ = "ignored_canvas_courses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    course_name: Mapped[str] = mapped_column(String(255), unique=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 def make_engine(database_path: str) -> Engine:
     engine = create_engine(f"sqlite:///{database_path}")
     Base.metadata.create_all(engine)

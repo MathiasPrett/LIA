@@ -12,8 +12,10 @@ from lia.integrations.google_calendar import (
     color_id_for_category,
     create_birthday_event,
     create_event,
+    delete_event,
     fetch_events,
     load_credentials,
+    update_event,
 )
 
 TZ = ZoneInfo("America/Santiago")
@@ -106,6 +108,17 @@ class _FakeInsert:
         self._captured["body"] = body
         return self
 
+    def patch(self, calendarId, eventId, body):
+        self._captured["calendarId"] = calendarId
+        self._captured["eventId"] = eventId
+        self._captured["body"] = body
+        return self
+
+    def delete(self, calendarId, eventId):
+        self._captured["calendarId"] = calendarId
+        self._captured["eventId"] = eventId
+        return self
+
     def execute(self):
         return self._response
 
@@ -194,3 +207,47 @@ def test_create_birthday_event_leap_day_uses_special_recurrence():
     create_birthday_event(service, "Cumpleaños de Leo", dt.date(2028, 2, 29))
 
     assert captured["body"]["recurrence"] == ["RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1"]
+
+
+def test_delete_event_calls_delete_with_calendar_and_event_id():
+    captured = {}
+    service = _FakeService(captured, response={})
+
+    delete_event(service, "primary", "evt-123")
+
+    assert captured["calendarId"] == "primary"
+    assert captured["eventId"] == "evt-123"
+
+
+def test_update_event_only_includes_given_fields():
+    captured = {}
+    response = {"id": "evt-1", "summary": "Nuevo título", "start": {"date": "2026-09-01"}, "end": {"date": "2026-09-02"}}
+    service = _FakeService(captured, response)
+
+    update_event(service, "primary", "evt-1", summary="Nuevo título")
+
+    assert captured["calendarId"] == "primary"
+    assert captured["eventId"] == "evt-1"
+    assert captured["body"] == {"summary": "Nuevo título"}
+
+
+def test_update_event_with_start_and_end_includes_timezone():
+    captured = {}
+    response = {
+        "id": "evt-2",
+        "start": {"dateTime": "2026-09-01T10:00:00-04:00"},
+        "end": {"dateTime": "2026-09-01T11:00:00-04:00"},
+    }
+    service = _FakeService(captured, response)
+
+    update_event(
+        service, "primary", "evt-2",
+        start=dt.datetime(2026, 9, 1, 10, 0, tzinfo=TZ),
+        end=dt.datetime(2026, 9, 1, 11, 0, tzinfo=TZ),
+        timezone="America/Santiago",
+    )
+
+    body = captured["body"]
+    assert body["start"]["timeZone"] == "America/Santiago"
+    assert body["end"]["timeZone"] == "America/Santiago"
+    assert "summary" not in body

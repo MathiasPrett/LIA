@@ -2,7 +2,7 @@ import hashlib
 
 from sqlalchemy.orm import Session
 
-from lia.db import SeenItem
+from lia.db import IgnoredCanvasCourse, SeenItem
 from lia.integrations.canvas import CanvasActivityItem
 
 _KIND_LABELS = {
@@ -34,6 +34,7 @@ def find_new_items(session: Session, items: list[CanvasActivityItem]) -> list[Ca
     actividad vieja apenas se conecta la integración.
     """
     is_first_run = session.query(SeenItem).filter_by(source="canvas").first() is None
+    ignored_courses = {row.course_name for row in session.query(IgnoredCanvasCourse).all()}
 
     new_items = []
     for item in items:
@@ -44,7 +45,7 @@ def find_new_items(session: Session, items: list[CanvasActivityItem]) -> list[Ca
             continue
 
         session.add(SeenItem(source="canvas", external_id=item.key, content_hash=_content_hash(item)))
-        if not is_first_run:
+        if not is_first_run and item.course_name not in ignored_courses:
             new_items.append(item)
 
     session.commit()
