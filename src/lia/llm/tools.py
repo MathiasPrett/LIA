@@ -18,8 +18,25 @@ from lia.integrations.google_calendar import (
 )
 from lia.integrations.google_tasks import insert_task
 from lia.integrations.weather import WeatherError, fetch_daily_forecast
+from lia.bot.ui import send_document
 from lia.llm.registry import Tool, ToolRegistry
 from lia.services.canvas_ignore import ignore_course, list_ignored_courses, unignore_course
+from lia.services.expenses import (
+    CATEGORIAS_GASTO,
+    add_expense,
+    day_bounds,
+    delete_last_expense,
+    format_clp,
+    list_budgets,
+    list_expenses,
+    month_bounds,
+    month_spend_for_category,
+    now_local,
+    set_budget,
+    summarize,
+    to_csv_bytes,
+    update_last_expense,
+)
 from lia.services.planner import find_free_slots
 
 _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
@@ -45,7 +62,9 @@ def _event_to_dict(event) -> dict:
     }
 
 
-def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegistry:
+def build_tools(settings: Settings, session_factory: sessionmaker, bot=None) -> ToolRegistry:
+    """`bot` solo hace falta para mandar archivos al chat (el CSV de gastos). En los
+    tests se omite y esa función puntual devuelve un error claro en vez de reventar."""
     registry = ToolRegistry()
 
     async def listar_eventos(desde: str, hasta: str) -> dict:
@@ -594,6 +613,185 @@ def build_tools(settings: Settings, session_factory: sessionmaker) -> ToolRegist
                 "required": ["texto", "cuando"],
             },
             handler=crear_recordatorio,
+        )
+    )
+
+    # --- Gastos personales ---------------------------------------------------------
+    # Tres tools, no siete: los schemas viajan en CADA llamada al LLM (~156 tokens por
+    # tool medidos), así que agrupar las operaciones poco frecuentes en `ajustar_gastos`
+    # ahorra más de la mitad del costo fijo mensual de la feature.
+
+    _CATEGORIAS = list(CATEGORIAS_GASTO.keys())
+
+    async def registrar_gasto(
+        monto: int, descripcion: str, categoria: str, fecha: str | None = None
+    ) -> dict:
+        ahora = now_local(settings.timezone)
+        spent_at = (
+            dt.datetime.combine(dt.date.fromisoformat(fecha), ahora.time()) if fecha else ahora
+        )
+
+        with session_factory() as session:
+            gasto = add_expense(session, int(monto), descripcion, categoria, spent_at)
+            limite = list_budgets(session).get(gasto.category)
+            gastado_mes = month_spend_for_category(session, gasto.category, ahora)
+
+        return {
+            "monto": gasto.amount_clp,
+            "descripcion": gasto.description,
+            "categoria": gasto.category,
+            "fecha": gasto.spent_at.date().isoformat(),
+            "gastado_mes_categoria": gastado_mes,
+            "limite": limite,
+            "supera": limite is not None and gastado_mes > limite,
+        }
+
+    registry.register(
+        Tool(
+            name="registrar_gasto",
+            description=(
+                "Anota un gasto. Va directo, sin confirmación. Monto en pesos chilenos enteros "
+                "('2 lucas'=2000). Si menciona varios gastos, llámala una vez por cada uno."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "monto": {"type": "integer"},
+                    "descripcion": {"type": "string"},
+                    "categoria": {"type": "string", "enum": _CATEGORIAS},
+                    "fecha": {"type": "string", "description": "YYYY-MM-DD; omitir si fue hoy"},
+                },
+                "required": ["monto", "descripcion", "categoria"],
+            },
+            handler=registrar_gasto,
+        )
+    )
+
+    async def consultar_gastos(
+        desde: str | None = None,
+        hasta: str | None = None,
+        categoria: str | None = None,
+        exportar_csv: bool = False,
+    ) -> dict:
+        ahora = now_local(settings.timezone)
+        if desde or hasta:
+            inicio_mes, fin_mes = month_bounds(ahora)
+            start = dt.date.fromisoformat(desde) if desde else inicio_mes.date()
+            end = dt.date.fromisoformat(hasta) if hasta else fin_mes.date()
+            rango = day_bounds(start, end)
+        else:
+            rango = month_bounds(ahora)
+
+        with session_factory() as session:
+            resumen = summarize(session, *rango)
+            gastos = list_expenses(session, *rango, categoria) if exportar_csv else []
+
+        resumen["desde"] = rango[0].date().isoformat()
+        resumen["hasta"] = rango[1].date().isoformat()
+
+        if not exportar_csv:
+            return resumen
+
+        if bot is None:
+            resumen["error"] = "No puedo mandar archivos en este momento."
+            return resumen
+        if not gastos:
+            resumen["enviado"] = False
+            resumen["error"] = "No hay gastos en ese rango, así que no generé el archivo."
+            return resumen
+
+        nombre = f"gastos-{resumen['desde']}_a_{resumen['hasta']}.csv"
+        await send_document(
+            bot,
+            settings.owner_user_id,
+            to_csv_bytes(gastos),
+            nombre,
+            caption=f"📄 {len(gastos)} gastos, {format_clp(resumen['total'])} en total.",
+        )
+        resumen["enviado"] = True
+        resumen["filas"] = len(gastos)
+        return resumen
+
+    registry.register(
+        Tool(
+            name="consultar_gastos",
+            description=(
+                "Resume gastos por categoría y el estado de los presupuestos. Sin fechas, el mes "
+                "en curso. exportar_csv=true además manda el archivo al chat."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "desde": {"type": "string", "description": "YYYY-MM-DD"},
+                    "hasta": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
+                    # Sin `enum` a propósito: la lista de categorías ya viaja en
+                    # registrar_gasto y repetirla acá costaba ~90 tokens en cada llamada.
+                    "categoria": {"type": "string", "description": "Filtra el CSV a una categoría"},
+                    "exportar_csv": {"type": "boolean"},
+                },
+            },
+            handler=consultar_gastos,
+        )
+    )
+
+    async def ajustar_gastos(
+        accion: str,
+        monto: int | None = None,
+        descripcion: str | None = None,
+        categoria: str | None = None,
+    ) -> dict:
+        with session_factory() as session:
+            if accion == "corregir_ultimo":
+                gasto = update_last_expense(
+                    session,
+                    int(monto) if monto is not None else None,
+                    descripcion,
+                    categoria,
+                )
+                if gasto is None:
+                    return {"error": "No hay ningún gasto registrado todavía."}
+                return {
+                    "corregido": True,
+                    "monto": gasto.amount_clp,
+                    "descripcion": gasto.description,
+                    "categoria": gasto.category,
+                }
+
+            if accion == "eliminar_ultimo":
+                gasto = delete_last_expense(session)
+                if gasto is None:
+                    return {"error": "No hay ningún gasto registrado todavía."}
+                return {"eliminado": True, "monto": gasto.amount_clp, "descripcion": gasto.description}
+
+            if accion == "definir_presupuesto":
+                if categoria is None or monto is None:
+                    return {"error": "Para definir un presupuesto necesito la categoría y el monto."}
+                set_budget(session, categoria, int(monto))
+                return {"categoria": categoria, "limite_mensual": int(monto)}
+
+        return {"error": f"Acción desconocida: {accion}"}
+
+    registry.register(
+        Tool(
+            name="ajustar_gastos",
+            description=(
+                "Corrige o borra el último gasto anotado, o fija el tope mensual de una "
+                "categoría (monto 0 lo quita)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "accion": {
+                        "type": "string",
+                        "enum": ["corregir_ultimo", "eliminar_ultimo", "definir_presupuesto"],
+                    },
+                    "monto": {"type": "integer"},
+                    "descripcion": {"type": "string"},
+                    "categoria": {"type": "string"},
+                },
+                "required": ["accion"],
+            },
+            handler=ajustar_gastos,
         )
     )
 

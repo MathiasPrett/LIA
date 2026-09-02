@@ -26,9 +26,12 @@ def main() -> None:
         retry_initial_delay=settings.gemini_retry_initial_delay,
         retry_max_delay=settings.gemini_retry_max_delay,
     )
-    tools = build_tools(settings, session_factory)
+    # La app se crea primero para poder pasarle el bot a las tools (lo necesita
+    # `consultar_gastos` para mandar el CSV al chat). Los handlers leen
+    # `bot_data["tools"]` en tiempo de ejecución, así que asignarlo después es seguro.
+    app = build_application(settings, session_factory, llm_provider)
+    app.bot_data["tools"] = build_tools(settings, session_factory, bot=app.bot)
 
-    app = build_application(settings, session_factory, llm_provider, tools)
     register_jobs(app, settings)
     app.run_polling()
 

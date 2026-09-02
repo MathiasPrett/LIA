@@ -85,6 +85,11 @@ Reglas de comportamiento:
   solo un aviso, y se aplica directo sin pedir confirmación. Si falta la fecha
   u hora, pregúntala antes de crear el recordatorio.
 - Si preguntan por el clima, usa la herramienta clima en vez de inventar datos.
+- Si cuenta que gastó o compró algo, usa registrar_gasto (categoría "otros" si ninguna
+  calza). Si no dice el monto, pregúntalo: nunca lo inventes.
+- Si registrar_gasto devuelve "supera": true, avísale que se pasó del tope de esa
+  categoría, con cuánto lleva y cuál era el límite.
+- Los montos se escriben con punto de miles: $2.000.
 
 Distingue tres tipos de cosas que se pueden guardar, y usa la herramienta correcta
 para cada una — no las mezcles:

@@ -290,6 +290,12 @@ async def confirmar_accion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     session_factory = context.bot_data["session_factory"]
     tool = tools.get(tool_name)
 
+    # Aplicar puede tardar 1-3 s (API de Google desde la Pi). Editar el mensaje ahora
+    # da feedback y —al editar sin reply_markup— borra el teclado inline, así no queda
+    # botón que volver a apretar: ese doble clic era lo que disparaba el falso
+    # "esa confirmación ya expiró" mientras la acción sí se estaba aplicando.
+    await edit_formatted(query, "⏳ Aplicando…")
+
     try:
         await tool.handler(**pending.arguments)
     except Exception as exc:

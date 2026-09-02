@@ -171,6 +171,18 @@ También se agregaron, del backlog que había quedado pendiente:
 
 **Estado: implementado y con tests, pendiente de probar en vivo** (necesita que el usuario rehaga el OAuth con el scope nuevo antes de que `crear_tarea`/`crear_cumpleanos` funcionen).
 
+### Fase 8 — Finanzas personales
+Registro de gastos sin fricción: el usuario cuenta lo que gastó (escrito o por nota de voz) y LIA lo persiste con monto, descripción, fecha y categoría. Después puede pedir resúmenes, fijar topes mensuales por categoría, y exportar un CSV al chat.
+
+Decisiones que vale la pena recordar:
+- **Categorías fijas** (16), no inventadas por el LLM: sin lista fija los totales dejan de sumar por variantes del mismo nombre.
+- **`spent_at` en hora local de Chile**, excepción deliberada a la convención UTC del proyecto — ver `CLAUDE.md`.
+- **3 tools en vez de 7**, por restricción de tokens: los schemas viajan en cada llamada al LLM. Costo final medido: **+570 tokens/llamada ≈ +$0.17/mes**, sobre los ~$0.77 previos.
+- Sin confirmación inline (a diferencia del calendario): es de alta frecuencia y reversible, mismo criterio que `crear_recordatorio`. Por eso corregir/borrar el último gasto es parte del núcleo, no un extra.
+- `ahorro` no cuenta como consumo (es un traspaso), así que el resumen devuelve dos totales.
+
+**Estado: implementado y con tests, pendiente de probar en vivo.**
+
 ---
 
 ## Presupuesto del LLM

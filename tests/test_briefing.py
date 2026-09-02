@@ -129,6 +129,28 @@ def test_weekly_briefing_places_assignment_on_its_due_day():
     assert text.index("Miércoles 26") < text.index("Proyecto final")
 
 
+def test_weekly_briefing_adds_spending_line_and_flags_exceeded_budgets():
+    spending = {
+        "total": 200000,
+        "total_consumo": 180000,
+        "por_categoria": [],
+        "presupuestos": [
+            {"categoria": "fiesta", "limite": 30000, "gastado": 34000, "supera": True},
+            {"categoria": "comida", "limite": 100000, "gastado": 50000, "supera": False},
+        ],
+    }
+    text = format_weekly_briefing([], dt.date(2026, 8, 24), spending_summary=spending)
+
+    assert "$180.000" in text  # usa el total de consumo, no el que incluye ahorro
+    assert "fiesta" in text and "$34.000" in text
+    assert "comida" not in text  # la que va dentro del tope no se menciona
+
+
+def test_weekly_briefing_without_spending_summary_is_unchanged():
+    text = format_weekly_briefing([], dt.date(2026, 8, 24))
+    assert "💸" not in text
+
+
 def test_weekly_briefing_excludes_assignment_due_outside_the_week():
     assignment = CanvasAssignment(
         name="Tarea de otra semana",

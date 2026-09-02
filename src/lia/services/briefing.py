@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from lia.integrations.canvas import CanvasAssignment
 from lia.integrations.google_calendar import CalendarEvent
+from lia.services.expenses import emoji_categoria, format_clp
 
 _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 _MESES = [
@@ -62,11 +63,26 @@ def format_daily_briefing(
     return text
 
 
+def _format_spending_line(spending_summary: dict) -> str:
+    """Una línea con el gasto del mes y las categorías que se pasaron de su tope."""
+    total = format_clp(spending_summary.get("total_consumo", 0))
+    line = f"💸 Este mes llevas {total} gastados."
+
+    excedidas = [p for p in spending_summary.get("presupuestos", []) if p["supera"]]
+    for p in excedidas:
+        line += (
+            f"\n⚠️ {emoji_categoria(p['categoria'])} {p['categoria']}: "
+            f"{format_clp(p['gastado'])} de {format_clp(p['limite'])}"
+        )
+    return line
+
+
 def format_weekly_briefing(
     events: list[CalendarEvent],
     week_start: dt.date,
     pending_assignments: list[CanvasAssignment] | None = None,
     timezone: str = "UTC",
+    spending_summary: dict | None = None,
 ) -> str:
     week_end = week_start + dt.timedelta(days=6)
     header = (
@@ -89,8 +105,10 @@ def format_weekly_briefing(
         if week_start <= day <= week_end:
             by_day.setdefault(day, []).append(_format_assignment_line(assignment, tz))
 
+    gastos = f"\n\n{_format_spending_line(spending_summary)}" if spending_summary else ""
+
     if not by_day:
-        return f"{header}\n\nNo tienes eventos ni entregas agendadas esta semana."
+        return f"{header}\n\nNo tienes eventos ni entregas agendadas esta semana.{gastos}"
 
     blocks = []
     for day in sorted(by_day):
@@ -98,4 +116,4 @@ def format_weekly_briefing(
         day_lines = "\n".join(by_day[day])
         blocks.append(f"{dia.capitalize()} {day.day}:\n{day_lines}")
 
-    return f"{header}\n\n" + "\n\n".join(blocks)
+    return f"{header}\n\n" + "\n\n".join(blocks) + gastos

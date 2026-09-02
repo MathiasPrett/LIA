@@ -1,4 +1,5 @@
 import logging
+from io import BytesIO
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.constants import ParseMode
@@ -38,6 +39,15 @@ async def edit_formatted(query, text: str) -> None:
     except BadRequest:
         logger.warning("No se pudo parsear Markdown al editar el mensaje, reenvío en texto plano")
         await query.edit_message_text(text)
+
+
+async def send_document(
+    bot: ExtBot, chat_id: int, data: bytes, filename: str, caption: str | None = None
+) -> None:
+    """Manda un archivo generado en memoria (sin pasar por disco)."""
+    await bot.send_document(
+        chat_id=chat_id, document=BytesIO(data), filename=filename, caption=caption
+    )
 
 
 def confirmation_keyboard(tool_name: str) -> InlineKeyboardMarkup:

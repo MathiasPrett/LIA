@@ -15,6 +15,7 @@ from lia.services.briefing import format_daily_briefing, format_weekly_briefing
 from lia.services.budget import month_to_date_cost_usd
 from lia.services.canvas_watcher import find_new_items, format_activity_notification
 from lia.services.conversation import log_usage
+from lia.services.expenses import month_bounds, now_local, summarize
 from lia.services.preferences import get_preference, set_preference
 from lia.services.reminders import find_due_reminders, find_events_needing_reminder, format_adhoc_reminder, format_reminder
 
@@ -152,7 +153,12 @@ async def _send_weekly_briefing(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Job semanal: no se pudo consultar Canvas, sigo solo con el calendario")
         pending_assignments = []
 
-    plain_text = format_weekly_briefing(events, week_start, pending_assignments, settings.timezone)
+    with session_factory() as session:
+        spending = summarize(session, *month_bounds(now_local(settings.timezone)))
+
+    plain_text = format_weekly_briefing(
+        events, week_start, pending_assignments, settings.timezone, spending
+    )
     text = await _redact_with_llm(
         context,
         settings,

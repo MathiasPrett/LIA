@@ -66,6 +66,32 @@ class Preference(Base):
     value: Mapped[str] = mapped_column(Text)
 
 
+class Expense(Base):
+    """Gasto personal registrado a mano por el usuario."""
+
+    __tablename__ = "expenses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # CLP no tiene decimales: Integer evita el error de redondeo de los flotantes al sumar.
+    amount_clp: Mapped[int] = mapped_column(Integer)
+    description: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    # OJO: naive en HORA LOCAL de Chile, no en UTC como el resto de las tablas. Es una
+    # excepción deliberada (ver CLAUDE.md): así "este mes" es una comparación directa y
+    # un gasto de las 22:00 del 30/09 no se cuela en octubre por el desfase horario.
+    spent_at: Mapped[dt.datetime] = mapped_column(DateTime)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_utcnow)  # naive UTC
+
+
+class SpendingBudget(Base):
+    """Tope mensual de gasto por categoría."""
+
+    __tablename__ = "spending_budgets"
+
+    category: Mapped[str] = mapped_column(String(32), primary_key=True)
+    monthly_limit_clp: Mapped[int] = mapped_column(Integer)
+
+
 class IgnoredCanvasCourse(Base):
     """Cursos de Canvas cuyas novedades/tareas el usuario pidió dejar de notificar."""
 

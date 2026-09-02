@@ -18,8 +18,11 @@ def build_application(
     settings: Settings,
     session_factory: sessionmaker,
     llm_provider: LLMProvider,
-    tools: ToolRegistry,
+    tools: ToolRegistry | None = None,
 ) -> Application:
+    """`tools` puede venir vacío y asignarse después en `bot_data`: hace falta para que
+    las tools se construyan con una referencia al bot ya creado (ver `__main__.py`).
+    Los handlers leen `bot_data["tools"]` recién en tiempo de ejecución."""
     app = ApplicationBuilder().token(settings.telegram_bot_token).build()
     app.bot_data["settings"] = settings
     app.bot_data["session_factory"] = session_factory
