@@ -19,7 +19,13 @@ def main() -> None:
     engine = make_engine(str(settings.database_path))
     session_factory = make_session_factory(engine)
 
-    llm_provider = GeminiProvider(settings.gemini_api_key, settings.gemini_model)
+    llm_provider = GeminiProvider(
+        settings.gemini_api_key,
+        settings.gemini_model,
+        retry_attempts=settings.gemini_retry_attempts,
+        retry_initial_delay=settings.gemini_retry_initial_delay,
+        retry_max_delay=settings.gemini_retry_max_delay,
+    )
     tools = build_tools(settings, session_factory)
 
     app = build_application(settings, session_factory, llm_provider, tools)

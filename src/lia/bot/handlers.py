@@ -3,8 +3,11 @@ import datetime as dt
 import logging
 from zoneinfo import ZoneInfo
 
+import httpx
+from google.genai.errors import APIError
 from googleapiclient.errors import HttpError
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import ContextTypes, filters
 
 from lia.bot.ui import confirmation_keyboard, edit_formatted, reply_formatted
@@ -190,35 +193,72 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if settings is None:
         return
 
+    detalle = describe_error(context.error) if context.error else "error desconocido."
     try:
-        await context.bot.send_message(
-            settings.owner_user_id,
-            "Tuve un problema procesando eso (puede ser que el modelo de IA esté con alta demanda "
-            "en este momento). Intenta de nuevo en unos segundos.",
-        )
+        # Sin parse_mode a propósito: el detalle técnico trae caracteres que
+        # rompen el Markdown de Telegram y dejarían el mensaje sin enviar.
+        await context.bot.send_message(settings.owner_user_id, f"❌ No pude procesar eso: {detalle}")
     except Exception:
         logger.exception("Encima falló el aviso de error al usuario")
 
 
-def describe_tool_error(exc: Exception) -> str:
-    """Traduce el error de una herramienta a algo que le sirva al usuario (y al LLM)."""
+_MAX_DETALLE = 400
+
+
+def _detalle(texto: str) -> str:
+    texto = " ".join(str(texto).split())
+    return texto if len(texto) <= _MAX_DETALLE else texto[:_MAX_DETALLE] + "…"
+
+
+def describe_error(exc: Exception) -> str:
+    """Explicación en castellano + el error técnico real (código y mensaje).
+
+    Antes todos los fallos mostraban el mismo texto genérico, así que un 503 de
+    Gemini, un corte de DNS en la Pi y un permiso faltante de Google eran
+    indistinguibles desde el chat. El detalle técnico va siempre.
+    """
     if isinstance(exc, CalendarNotConnected):
         return str(exc)
+
+    if isinstance(exc, APIError):  # google.genai: Gemini
+        mensaje_google = str(exc.message or exc)
+        if exc.code == 429 and "credit" in mensaje_google.lower():
+            causa = (
+                "se agotó el crédito prepagado de tu cuenta de Google AI Studio. "
+                "Hasta que lo recargues no voy a poder responder nada"
+            )
+        else:
+            causa = {
+                503: "el modelo de IA está saturado ahora mismo (es del lado de Google, no de tu cuenta ni del plan)",
+                429: "se pasó la cuota o el límite de peticiones del proyecto",
+                500: "Gemini tuvo un error interno",
+            }.get(exc.code, "Gemini rechazó la petición")
+        return f"{causa}.\n\n🔧 Gemini {exc.code} {exc.status or ''}\n{_detalle(mensaje_google)}"
+
     if isinstance(exc, HttpError):
         status = getattr(exc.resp, "status", None)
-        if status == 404:
-            return (
+        causa = {
+            404: (
                 "ese evento ya no está en el calendario (o el identificador que tenía quedó "
-                "viejo). Pregúntame de nuevo por tu agenda para que lo busque otra vez."
-            )
-        if status == 403:
-            return (
-                "Google no me deja escribir ahí. Puede ser un calendario de solo lectura "
-                "(por ejemplo uno suscrito) o una API que falta habilitar en el proyecto."
-            )
-        if status in (401, 400):
-            return "Google rechazó la petición. Puede que el acceso haya expirado."
-    return "hubo un error inesperado al aplicar el cambio."
+                "viejo). Pregúntame de nuevo por tu agenda para que lo busque otra vez"
+            ),
+            403: (
+                "Google no me deja escribir ahí: puede ser un calendario de solo lectura "
+                "o una API sin habilitar en el proyecto"
+            ),
+            401: "Google rechazó las credenciales, puede que el acceso haya expirado",
+            400: "Google rechazó la petición por datos inválidos",
+        }.get(status, "Google devolvió un error")
+        return f"{causa}.\n\n🔧 Google API {status}\n{_detalle(exc.reason or exc)}"
+
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, NetworkError)):
+        return (
+            "no pude salir a internet desde la Raspberry. Esto no es Gemini: es la red o el "
+            "DNS de la Pi.\n\n"
+            f"🔧 {type(exc).__name__}\n{_detalle(exc)}"
+        )
+
+    return f"error inesperado.\n\n🔧 {type(exc).__name__}\n{_detalle(exc)}"
 
 
 async def confirmar_accion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -254,7 +294,7 @@ async def confirmar_accion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await tool.handler(**pending.arguments)
     except Exception as exc:
         logger.exception("Falló la ejecución de %s tras confirmar", tool_name)
-        detalle = describe_tool_error(exc)
+        detalle = describe_error(exc)
         # Queda en el historial para que el LLM sepa que NO se aplicó: si no, al
         # pedirle "continúa" vuelve a proponer lo mismo con datos inventados.
         with session_factory() as session:

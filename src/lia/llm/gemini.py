@@ -12,11 +12,11 @@ from lia.llm.registry import Tool
 
 MAX_TOOL_ITERATIONS = 5
 
-# USD por 1M tokens. Actualizar si cambia el modelo (ver docs/main-plan.md § Presupuesto).
-# gemini-2.5-flash-lite dejó de estar disponible para API keys nuevas en ago-2026
-# (antes de su retiro oficial del 16-oct-2026); gemini-3.1-flash-lite es su reemplazo.
+# USD por 1M tokens (tier de pago, verificado en ai.google.dev/gemini-api/docs/pricing).
+# Actualizar si cambia el modelo — ver docs/main-plan.md § Presupuesto.
 PRICING_PER_MILLION = {
     "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-2.5-flash": (0.30, 2.50),
     "gemini-3.1-flash-lite": (0.25, 1.50),
     "gemini-3.5-flash-lite": (0.30, 2.50),
 }
@@ -45,8 +45,33 @@ def _build_contents(history: list[HistoryTurn], user_message: str) -> list[types
 
 
 class GeminiProvider(LLMProvider):
-    def __init__(self, api_key: str, model: str) -> None:
-        self._client = genai.Client(api_key=api_key)
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        retry_attempts: int = 5,
+        retry_initial_delay: float = 1.0,
+        retry_max_delay: float = 20.0,
+    ) -> None:
+        # Sin `retry_options` explícito el SDK usa `stop_after_attempt(1)`, o sea
+        # NO reintenta nunca: un 503 de "alta demanda" (que es transitorio por
+        # definición) llegaba al usuario como error a la primera. Con esto se
+        # reintenta con backoff exponencial, y también ante cortes de red o DNS
+        # transitorios (`httpx.ConnectError`), que en la Pi son frecuentes.
+        #
+        # 429 queda FUERA de los códigos reintentables a propósito: siendo un bot
+        # de un solo usuario, un 429 casi nunca es "muchas peticiones por minuto"
+        # sino crédito agotado o cuota del proyecto, y ahí reintentar solo agrega
+        # ~30 s de espera antes de dar el mismo error.
+        http_options = types.HttpOptions(
+            retry_options=types.HttpRetryOptions(
+                attempts=retry_attempts,
+                initial_delay=retry_initial_delay,
+                max_delay=retry_max_delay,
+                http_status_codes=[408, 500, 502, 503, 504],
+            )
+        )
+        self._client = genai.Client(api_key=api_key, http_options=http_options)
         self._model = model
 
     async def run_conversation(

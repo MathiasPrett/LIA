@@ -33,7 +33,14 @@ class Settings(BaseSettings):
     weekly_briefing_minute: int = Field(default=0)
 
     gemini_api_key: str = Field(description="API key de Google AI Studio (aistudio.google.com/apikey)")
+    # gemini-2.5-flash-lite aparece en models.list() pero da 404 "no longer available
+    # to new users" — no sirve. 3.1-flash-lite es el flash-lite más barato usable hoy.
     gemini_model: str = Field(default="gemini-3.1-flash-lite")
+    gemini_retry_attempts: int = Field(
+        default=5, description="Intentos totales (incluye el primero) ante 429/5xx o cortes de red"
+    )
+    gemini_retry_initial_delay: float = Field(default=1.0, description="Espera inicial del backoff, en segundos")
+    gemini_retry_max_delay: float = Field(default=20.0, description="Tope de espera entre reintentos, en segundos")
 
     conversation_history_turns: int = Field(default=15, description="Ventana deslizante de memoria de chat")
 
