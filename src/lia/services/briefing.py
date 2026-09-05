@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from lia.integrations.canvas import CanvasAssignment
 from lia.integrations.google_calendar import CalendarEvent
+from lia.integrations.google_tasks import TaskItem
 from lia.services.expenses import emoji_categoria, format_clp
 
 _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
@@ -35,11 +36,18 @@ def _format_assignment_line(assignment: CanvasAssignment, tz: ZoneInfo) -> str:
     return line
 
 
+def _tasks_due_by(tasks: list[TaskItem] | None, date: dt.date) -> list[TaskItem]:
+    """Tareas de Google que vencen ese día o antes (atrasadas). Las que no tienen
+    fecha quedan fuera a propósito: no ensucian el resumen de la mañana."""
+    return sorted((t for t in (tasks or []) if t.due and t.due <= date), key=lambda t: t.due)
+
+
 def format_daily_briefing(
     events: list[CalendarEvent],
     date: dt.date,
     pending_assignments: list[CanvasAssignment] | None = None,
     timezone: str = "UTC",
+    google_tasks: list[TaskItem] | None = None,
 ) -> str:
     dia = _DIAS[date.weekday()]
     header = f"Buenos días. Hoy es {dia} {date.day} de {_MESES[date.month - 1]}."
@@ -59,6 +67,13 @@ def format_daily_briefing(
     if due_today:
         lines = "\n".join(_format_assignment_line(a, tz) for a in due_today)
         text += f"\n\nEntregas de Canvas para hoy:\n{lines}"
+
+    tareas = _tasks_due_by(google_tasks, date)
+    if tareas:
+        lines = "\n".join(
+            f"✅ {t.title}" + (" (atrasada)" if t.due < date else "") for t in tareas
+        )
+        text += f"\n\nTareas pendientes:\n{lines}"
 
     return text
 
@@ -83,6 +98,7 @@ def format_weekly_briefing(
     pending_assignments: list[CanvasAssignment] | None = None,
     timezone: str = "UTC",
     spending_summary: dict | None = None,
+    google_tasks: list[TaskItem] | None = None,
 ) -> str:
     week_end = week_start + dt.timedelta(days=6)
     header = (
@@ -104,6 +120,10 @@ def format_weekly_briefing(
         day = assignment.due_at.astimezone(tz).date()
         if week_start <= day <= week_end:
             by_day.setdefault(day, []).append(_format_assignment_line(assignment, tz))
+
+    for task in google_tasks or []:
+        if task.due and week_start <= task.due <= week_end:
+            by_day.setdefault(task.due, []).append(f"✅ {task.title}")
 
     gastos = f"\n\n{_format_spending_line(spending_summary)}" if spending_summary else ""
 

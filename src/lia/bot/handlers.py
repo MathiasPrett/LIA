@@ -14,6 +14,7 @@ from lia.bot.ui import confirmation_keyboard, edit_formatted, reply_formatted
 from lia.config import Settings
 from lia.integrations.canvas import CanvasError, fetch_pending_assignments
 from lia.integrations.google_calendar import CalendarNotConnected, fetch_events
+from lia.integrations.google_tasks import fetch_tasks
 from lia.integrations.transcribe import TranscriptionError, transcribe_audio
 from lia.llm.base import PendingConfirmation
 from lia.llm.prompts import build_system_prompt
@@ -65,6 +66,15 @@ def _this_week_range(settings: Settings) -> tuple[dt.date, dt.datetime, dt.datet
     return week_start, time_min, time_max
 
 
+async def _fetch_tasks_or_empty(settings: Settings) -> list:
+    """Las tareas de Google son un extra de /hoy y /semana: si fallan, el resumen sale igual."""
+    try:
+        return await asyncio.to_thread(fetch_tasks, settings.google_token_path)
+    except Exception:
+        logger.exception("No se pudo consultar Google Tasks, sigo sin ellas")
+        return []
+
+
 async def hoy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.bot_data["settings"]
     today, time_min, time_max = _today_range(settings)
@@ -90,8 +100,10 @@ async def hoy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("No se pudo consultar Canvas para /hoy, sigo solo con el calendario")
         pending_assignments = []
 
+    tareas = await _fetch_tasks_or_empty(settings)
     await reply_formatted(
-        update.message, format_daily_briefing(events, today, pending_assignments, settings.timezone)
+        update.message,
+        format_daily_briefing(events, today, pending_assignments, settings.timezone, tareas),
     )
 
 
@@ -120,9 +132,12 @@ async def semana(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("No se pudo consultar Canvas para /semana, sigo solo con el calendario")
         pending_assignments = []
 
+    tareas = await _fetch_tasks_or_empty(settings)
     await reply_formatted(
         update.message,
-        format_weekly_briefing(events, week_start, pending_assignments, settings.timezone),
+        format_weekly_briefing(
+            events, week_start, pending_assignments, settings.timezone, google_tasks=tareas
+        ),
     )
 
 

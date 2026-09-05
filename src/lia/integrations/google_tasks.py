@@ -35,7 +35,10 @@ def create_task(
         body["notes"] = notes
     if due:
         # La API de Tasks solo guarda la fecha: descarta cualquier hora que se le mande.
-        body["due"] = dt.datetime.combine(due, dt.time.min, tzinfo=dt.UTC).isoformat()
+        # Se emite exactamente el formato que Google devuelve ('...T00:00:00.000Z') en vez
+        # del equivalente con offset '+00:00': ambos son RFC 3339 válidos, pero usar el que
+        # la propia API produce evita depender de qué tan tolerante sea su parser.
+        body["due"] = f"{due.isoformat()}T00:00:00.000Z"
 
     created = service.tasks().insert(tasklist="@default", body=body).execute()
     return _parse_task(created)
@@ -51,3 +54,29 @@ def insert_task(
     creds = load_credentials(token_path)
     service = build_tasks_service(creds)
     return create_task(service, title, notes, due)
+
+
+def list_tasks(
+    service: Resource,
+    show_completed: bool = False,
+    max_results: int = 100,
+) -> list[TaskItem]:
+    """Lista las tareas de la lista por defecto.
+
+    A propósito NO se usan los filtros `dueMin`/`dueMax` de la API: dejan fuera las
+    tareas sin fecha, que son varias de las pendientes reales, y devolverían una
+    lista incompleta. Se traen todas y el filtrado por fecha queda a la vista.
+    """
+    response = (
+        service.tasks()
+        .list(tasklist="@default", showCompleted=show_completed, maxResults=max_results)
+        .execute()
+    )
+    return [_parse_task(item) for item in response.get("items", [])]
+
+
+def fetch_tasks(token_path: Path, show_completed: bool = False) -> list[TaskItem]:
+    """Atajo síncrono equivalente a `fetch_events` pero para Google Tasks."""
+    creds = load_credentials(token_path)
+    service = build_tasks_service(creds)
+    return list_tasks(service, show_completed)

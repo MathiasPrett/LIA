@@ -1,13 +1,15 @@
 import asyncio
 import datetime as dt
+import logging
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import sessionmaker
 
 from lia.config import Settings
 from lia.db import Reminder
-from lia.integrations.canvas import fetch_activity_items, fetch_pending_assignments
+from lia.integrations.canvas import CanvasError, fetch_activity_items, fetch_pending_assignments
 from lia.integrations.google_calendar import (
+    CalendarNotConnected,
     CATEGORY_COLORS,
     color_id_for_category,
     fetch_events,
@@ -16,7 +18,7 @@ from lia.integrations.google_calendar import (
     modify_event,
     remove_event,
 )
-from lia.integrations.google_tasks import insert_task
+from lia.integrations.google_tasks import fetch_tasks, insert_task
 from lia.integrations.weather import WeatherError, fetch_daily_forecast
 from lia.bot.ui import send_document
 from lia.llm.registry import Tool, ToolRegistry
@@ -38,6 +40,8 @@ from lia.services.expenses import (
     update_last_expense,
 )
 from lia.services.planner import find_free_slots
+
+logger = logging.getLogger(__name__)
 
 _DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 _CATEGORY_EMOJI = {
@@ -406,12 +410,19 @@ def build_tools(settings: Settings, session_factory: sessionmaker, bot=None) -> 
         )
     )
 
-    async def canvas_tareas_pendientes() -> dict:
-        assignments = await fetch_pending_assignments(settings.canvas_base_url, settings.canvas_access_token)
-        with session_factory() as session:
-            ignorados = set(list_ignored_courses(session))
-        return {
-            "tareas": [
+    async def tareas_pendientes() -> dict:
+        # Cada fuente se reporta por separado y, si falla, devuelve su propio `error`:
+        # una consulta que falló no puede quedar indistinguible de "no hay nada", que
+        # es exactamente lo que llevaba al modelo a afirmar que no había tareas.
+        resultado: dict = {}
+
+        try:
+            assignments = await fetch_pending_assignments(
+                settings.canvas_base_url, settings.canvas_access_token
+            )
+            with session_factory() as session:
+                ignorados = set(list_ignored_courses(session))
+            resultado["canvas"] = [
                 {
                     "nombre": a.name,
                     "curso": a.course_name,
@@ -420,17 +431,39 @@ def build_tools(settings: Settings, session_factory: sessionmaker, bot=None) -> 
                 for a in assignments
                 if a.course_name not in ignorados
             ]
-        }
+        except CanvasError as exc:
+            logger.exception("No se pudo consultar Canvas")
+            resultado["canvas"] = {"error": f"No pude consultar Canvas: {exc}"}
+
+        try:
+            tareas = await asyncio.to_thread(fetch_tasks, settings.google_token_path)
+            resultado["google_tasks"] = [
+                {
+                    "titulo": t.title,
+                    "vence": t.due.isoformat() if t.due else None,
+                    "notas": t.notes,
+                }
+                for t in tareas
+            ]
+        except CalendarNotConnected as exc:
+            resultado["google_tasks"] = {"error": str(exc)}
+        except Exception as exc:
+            logger.exception("No se pudo consultar Google Tasks")
+            resultado["google_tasks"] = {"error": f"No pude consultar Google Tasks: {exc}"}
+
+        return resultado
 
     registry.register(
         Tool(
-            name="canvas_tareas_pendientes",
+            name="tareas_pendientes",
             description=(
-                "Lista las tareas/entregas pendientes en Canvas, ordenadas por fecha de "
-                "vencimiento. No incluye cursos que el usuario haya pedido ignorar."
+                "Lista TODO lo pendiente del usuario, de sus dos fuentes: entregas de Canvas y "
+                "tareas de Google Tasks. Úsala para cualquier pregunta sobre tareas o pendientes, "
+                "venga de donde venga. 'vence': null significa que esa tarea no tiene fecha "
+                "asignada, no que venza hoy."
             ),
             parameters={"type": "object", "properties": {}},
-            handler=canvas_tareas_pendientes,
+            handler=tareas_pendientes,
         )
     )
 
@@ -445,7 +478,7 @@ def build_tools(settings: Settings, session_factory: sessionmaker, bot=None) -> 
             description=(
                 "Deja de notificar tareas y novedades de un curso de Canvas. Usa el nombre del "
                 "curso exactamente como aparece en 'curso' en los resultados de "
-                "canvas_tareas_pendientes o canvas_novedades. Se aplica directo, sin confirmación "
+                "tareas_pendientes o canvas_novedades. Se aplica directo, sin confirmación "
                 "(es reversible con dejar_de_ignorar_curso_canvas)."
             ),
             parameters={

@@ -86,7 +86,7 @@ El LLM recibe el schema de estas funciones y decide cuáles llamar. Las de **lec
 | `crear_evento(titulo, inicio, fin, ...)` | **escritura** | Confirmación inline obligatoria |
 | `mover_evento` / `borrar_evento` | **escritura** | Confirmación inline obligatoria |
 | `buscar_huecos_libres(rango, duracion)` | lectura | Base del planificador semanal |
-| `canvas_tareas_pendientes()` | lectura | |
+| `tareas_pendientes()` | lectura | Canvas + Google Tasks unificados |
 | `canvas_novedades(desde)` | lectura | |
 | `correos_importantes(desde)` | lectura | |
 | `clima(fecha)` | lectura | |
@@ -167,7 +167,7 @@ Los eventos normales (`crear_evento`/`editar_evento`) ahora aceptan una `categor
 
 También se agregaron, del backlog que había quedado pendiente:
 - **`eliminar_evento`/`editar_evento`**: ambos requieren confirmación igual que `crear_evento`. `listar_eventos` ahora expone `id`/`calendario` de cada evento para que el LLM pueda referenciarlo. `editar_evento` es un patch parcial — solo toca los campos que el usuario pidió cambiar.
-- **Ignorar curso de Canvas** (por curso completo): `ignorar_curso_canvas`, `dejar_de_ignorar_curso_canvas`, `listar_cursos_ignorados_canvas`, sin confirmación (reversible). Filtra tanto las notificaciones automáticas (`canvas_watcher`) como el tool `canvas_tareas_pendientes`.
+- **Ignorar curso de Canvas** (por curso completo): `ignorar_curso_canvas`, `dejar_de_ignorar_curso_canvas`, `listar_cursos_ignorados_canvas`, sin confirmación (reversible). Filtra tanto las notificaciones automáticas (`canvas_watcher`) como el tool `tareas_pendientes`.
 
 **Estado: implementado y con tests, pendiente de probar en vivo** (necesita que el usuario rehaga el OAuth con el scope nuevo antes de que `crear_tarea`/`crear_cumpleanos` funcionen).
 
@@ -234,7 +234,7 @@ Estimación con uso realista (resumen diario, resumen semanal, ~10 mensajes de c
 - **Check-in diario liviano:** a la mañana pregunta "¿en qué vas a avanzar hoy?", a la noche pregunta si se cumplió — historial simple de foco/cumplimiento (se cruza bien con la "Retro semanal" de arriba).
 - **Salud de la propia infraestructura:** como el bot corre 24/7 en la Raspberry Pi, avisar si se queda sin espacio en disco, se cae el contenedor, o el refresh token de Google expira — para no descubrirlo recién cuando deja de mandar el resumen diario. Natural para la Fase 6 (Endurecimiento).
 - ~~`eliminar_evento`~~ y ~~editar evento~~ — **implementados** (Fase 7): `eliminar_evento`/`editar_evento` en `llm/tools.py`, apoyados en `delete_event`/`update_event` (patch parcial) de `google_calendar.py`. `_event_to_dict` ahora expone `id` y `calendario` para que el LLM pueda referenciar un evento después de `listar_eventos`. Ambos requieren confirmación, igual que `crear_evento`.
-- ~~Ignorar curso de Canvas~~ — **implementado** (Fase 7), por curso completo como estaba decidido: tabla `IgnoredCanvasCourse` en `db.py`, `services/canvas_ignore.py` (ignore/unignore/list), filtrado en `canvas_watcher.find_new_items` y en el tool `canvas_tareas_pendientes`. Tools `ignorar_curso_canvas`, `dejar_de_ignorar_curso_canvas` y `listar_cursos_ignorados_canvas`, sin confirmación (reversible).
+- ~~Ignorar curso de Canvas~~ — **implementado** (Fase 7), por curso completo como estaba decidido: tabla `IgnoredCanvasCourse` en `db.py`, `services/canvas_ignore.py` (ignore/unignore/list), filtrado en `canvas_watcher.find_new_items` y en el tool `tareas_pendientes`. Tools `ignorar_curso_canvas`, `dejar_de_ignorar_curso_canvas` y `listar_cursos_ignorados_canvas`, sin confirmación (reversible).
 
 ---
 

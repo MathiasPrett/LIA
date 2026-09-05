@@ -9,6 +9,7 @@ from lia.bot.ui import send_formatted
 from lia.config import Settings
 from lia.integrations.canvas import CanvasError, fetch_activity_items, fetch_pending_assignments
 from lia.integrations.google_calendar import CalendarNotConnected, fetch_events
+from lia.integrations.google_tasks import fetch_tasks
 from lia.llm.prompts import build_system_prompt
 from lia.services.backup import backup_database, prune_old_backups
 from lia.services.briefing import format_daily_briefing, format_weekly_briefing
@@ -76,6 +77,15 @@ async def _redact_with_llm(context: ContextTypes.DEFAULT_TYPE, settings: Setting
         return plain_text
 
 
+async def _fetch_google_tasks(settings: Settings, job: str) -> list:
+    """Las tareas son un extra del briefing: si fallan, el resumen sale igual sin ellas."""
+    try:
+        return await asyncio.to_thread(fetch_tasks, settings.google_token_path)
+    except Exception:
+        logger.exception("Job %s: no se pudo consultar Google Tasks, sigo sin ellas", job)
+        return []
+
+
 async def _send_daily_briefing(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.bot_data["settings"]
     session_factory = context.bot_data["session_factory"]
@@ -107,7 +117,10 @@ async def _send_daily_briefing(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Job diario: no se pudo consultar Canvas, sigo solo con el calendario")
         pending_assignments = []
 
-    plain_text = format_daily_briefing(events, today, pending_assignments, settings.timezone)
+    tareas = await _fetch_google_tasks(settings, "diario")
+    plain_text = format_daily_briefing(
+        events, today, pending_assignments, settings.timezone, tareas
+    )
     text = await _redact_with_llm(
         context,
         settings,
@@ -156,8 +169,9 @@ async def _send_weekly_briefing(context: ContextTypes.DEFAULT_TYPE) -> None:
     with session_factory() as session:
         spending = summarize(session, *month_bounds(now_local(settings.timezone)))
 
+    tareas = await _fetch_google_tasks(settings, "semanal")
     plain_text = format_weekly_briefing(
-        events, week_start, pending_assignments, settings.timezone, spending
+        events, week_start, pending_assignments, settings.timezone, spending, tareas
     )
     text = await _redact_with_llm(
         context,

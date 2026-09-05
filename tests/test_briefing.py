@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from lia.integrations.canvas import CanvasAssignment
 from lia.integrations.google_calendar import CalendarEvent
+from lia.integrations.google_tasks import TaskItem
 from lia.services.briefing import format_daily_briefing, format_weekly_briefing
 
 TZ = ZoneInfo("America/Santiago")
@@ -162,3 +163,42 @@ def test_weekly_briefing_excludes_assignment_due_outside_the_week():
         [], dt.date(2026, 8, 24), pending_assignments=[assignment], timezone="America/Santiago"
     )
     assert "Tarea de otra semana" not in text
+
+
+# --- Google Tasks en los briefings ---
+
+
+def _task(title, due):
+    return TaskItem(id=title, title=title, notes=None, due=due)
+
+
+def test_daily_briefing_muestra_las_tareas_que_vencen_hoy_y_las_atrasadas():
+    tareas = [
+        _task("Vence hoy", dt.date(2026, 9, 5)),
+        _task("Quedó atrasada", dt.date(2026, 9, 3)),
+        _task("Vence después", dt.date(2026, 9, 20)),
+    ]
+    text = format_daily_briefing([], dt.date(2026, 9, 5), google_tasks=tareas)
+
+    assert "Vence hoy" in text
+    assert "Quedó atrasada" in text and "(atrasada)" in text
+    assert "Vence después" not in text
+
+
+def test_daily_briefing_omite_las_tareas_sin_fecha():
+    # No tienen fecha de vencimiento, así que no pertenecen al resumen de la mañana.
+    text = format_daily_briefing([], dt.date(2026, 9, 5), google_tasks=[_task("Sin fecha", None)])
+    assert "Sin fecha" not in text
+
+
+def test_weekly_briefing_ubica_la_tarea_en_su_dia():
+    text = format_weekly_briefing(
+        [], dt.date(2026, 8, 24), google_tasks=[_task("Entregar informe", dt.date(2026, 8, 26))]
+    )
+    assert "Miércoles 26" in text
+    assert "Entregar informe" in text
+
+
+def test_briefings_sin_tareas_quedan_igual_que_antes():
+    assert "Tareas pendientes" not in format_daily_briefing([], dt.date(2026, 9, 5))
+    assert "✅" not in format_weekly_briefing([], dt.date(2026, 8, 24))
