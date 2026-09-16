@@ -2,9 +2,11 @@ import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
 
+import httplib2
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import Resource, build
 
-from lia.integrations.google_calendar import load_credentials
+from lia.integrations.google_calendar import _HTTP_TIMEOUT_SECONDS, load_credentials
 
 
 @dataclass
@@ -16,7 +18,8 @@ class TaskItem:
 
 
 def build_tasks_service(creds) -> Resource:
-    return build("tasks", "v1", credentials=creds, cache_discovery=False)
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_HTTP_TIMEOUT_SECONDS))
+    return build("tasks", "v1", http=http, cache_discovery=False)
 
 
 def _parse_task(raw: dict) -> TaskItem:

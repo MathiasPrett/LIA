@@ -1,0 +1,50 @@
+# Blueprint de Render. Worker (no web service): LIA usa long-polling, no recibe
+# tráfico entrante, así que no expone puerto ni necesita healthcheck HTTP.
+# Los free web services se duermen a los 15 min de inactividad y matarían el polling.
+services:
+  - type: worker
+    name: lia
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+
+    # Sin disco, cada deploy borra la base: gastos, recordatorios y el dedup de Canvas.
+    disk:
+      name: lia-data
+      mountPath: /data
+      sizeGB: 1
+
+    envVars:
+      # Rutas: el Dockerfile las apunta a /app/data, que en Render es efímero.
+      - key: DATABASE_PATH
+        value: /data/lia.db
+      - key: BACKUP_DIR
+        value: /data/backups
+      - key: HEARTBEAT_PATH
+        value: /data/heartbeat
+      # token.json se sube como Secret File; Render los monta en /etc/secrets/.
+      - key: GOOGLE_TOKEN_PATH
+        value: /etc/secrets/token.json
+      - key: TIMEZONE
+        value: America/Santiago
+
+      # sync: false = se cargan a mano en el dashboard y nunca viajan en el repo.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OWNER_USER_ID
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CALENDAR_IDS
+        sync: false
+      - key: CANVAS_BASE_URL
+        sync: false
+      - key: CANVAS_ACCESS_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: WEATHER_LATITUDE
+        sync: false
+      - key: WEATHER_LONGITUDE
+        sync: false

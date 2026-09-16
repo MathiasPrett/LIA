@@ -22,6 +22,21 @@ uv run pytest
 docker compose up --build
 ```
 
+## Desplegar en Render
+
+`render.yaml` ya declara el worker, el disco y las rutas. En el dashboard:
+
+1. **New → Blueprint**, apunta al repo. Render lee `render.yaml`.
+2. Rellena los secretos que pide (los marcados `sync: false`) con los valores de tu `.env`.
+3. **Environment → Secret Files**: sube `token.json` con ese nombre exacto. Queda en `/etc/secrets/token.json` (solo lectura — el código ya lo maneja).
+4. Deploy. De ahí en adelante, cada `git push` a `main` redespliega solo.
+
+Para llevarte la base de datos actual en vez de partir de cero, con el servicio ya corriendo:
+
+```bash
+scp data/lia.db <servicio>@ssh.oregon.render.com:/data/lia.db   # SSH viene con el plan pago
+```
+
 ## Desplegar a producción (Raspberry Pi)
 
 Después de pushear los cambios:

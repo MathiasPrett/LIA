@@ -1,8 +1,12 @@
+import asyncio
+
+from telegram import Update
+
 import httpx
 from google.genai.errors import APIError
 from googleapiclient.errors import HttpError
 
-from lia.bot.handlers import describe_error
+from lia.bot.handlers import describe_error, error_handler
 from lia.integrations.google_calendar import CalendarNotConnected
 
 
@@ -100,3 +104,34 @@ def test_very_long_detail_is_truncated_so_telegram_does_not_choke():
     mensaje = describe_error(ValueError("x" * 5000))
     assert "…" in mensaje
     assert len(mensaje) < 700
+
+
+# --- error_handler: no spamear por cortes de red del polling ---
+
+
+def _ctx(error, sent):
+    class Bot:
+        async def send_message(self, chat_id, text):
+            sent.append(text)
+
+    class Ctx:
+        bot = Bot()
+        bot_data = {"settings": type("S", (), {"owner_user_id": 1})()}
+
+    c = Ctx()
+    c.error = error
+    return c
+
+
+def test_error_de_polling_sin_update_no_manda_mensaje():
+    # update=None son fallos de get_updates en segundo plano; PTB ya reintenta solo.
+    sent = []
+    asyncio.run(error_handler(None, _ctx(httpx.ConnectError("boom"), sent)))
+    assert sent == []
+
+
+def test_error_con_update_real_si_avisa_al_usuario():
+    sent = []
+    update = Update(update_id=1)
+    asyncio.run(error_handler(update, _ctx(httpx.ConnectError("boom"), sent)))
+    assert len(sent) == 1 and "Raspberry" in sent[0]

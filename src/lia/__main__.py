@@ -33,7 +33,10 @@ def main() -> None:
     app.bot_data["tools"] = build_tools(settings, session_factory, bot=app.bot)
 
     register_jobs(app, settings)
-    app.run_polling()
+    # bootstrap_retries=-1: si la red de la Pi no está lista al arrancar, esperar en vez
+    # de morir. Por defecto es 0 ("Failed run number 0 of 0. Aborting") y el contenedor
+    # entra en crash-loop hasta que la conexión vuelve.
+    app.run_polling(bootstrap_retries=-1)
 
 
 if __name__ == "__main__":

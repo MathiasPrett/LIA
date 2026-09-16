@@ -208,6 +208,12 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if settings is None:
         return
 
+    # `update is None` = falló el polling en segundo plano, no un mensaje del usuario.
+    # PTB ya reintenta solo; avisar por Telegram cada corte de red convierte una caída
+    # de conexión en una ráfaga de mensajes por algo que nadie pidió.
+    if not isinstance(update, Update):
+        return
+
     detalle = describe_error(context.error) if context.error else "error desconocido."
     try:
         # Sin parse_mode a propósito: el detalle técnico trae caracteres que

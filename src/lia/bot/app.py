@@ -23,7 +23,10 @@ def build_application(
     """`tools` puede venir vacío y asignarse después en `bot_data`: hace falta para que
     las tools se construyan con una referencia al bot ya creado (ver `__main__.py`).
     Los handlers leen `bot_data["tools"]` recién en tiempo de ejecución."""
-    app = ApplicationBuilder().token(settings.telegram_bot_token).build()
+    # concurrent_updates: si un tool call se cuelga (llamada a Google lenta), el
+    # bot seguía respondiendo igual a mensajes nuevos en vez de tapar la cola
+    # entera hasta que esa única llamada terminara.
+    app = ApplicationBuilder().token(settings.telegram_bot_token).concurrent_updates(True).build()
     app.bot_data["settings"] = settings
     app.bot_data["session_factory"] = session_factory
     app.bot_data["llm_provider"] = llm_provider

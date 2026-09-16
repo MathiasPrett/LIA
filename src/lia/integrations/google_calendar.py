@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import httplib2
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import Resource, build
 
 logger = logging.getLogger(__name__)
@@ -79,8 +81,16 @@ def load_credentials(token_path: Path) -> Credentials:
     return creds
 
 
+# Sin timeout, un blip de red deja la llamada colgada para siempre: el bot
+# procesa updates en serie (`concurrent_updates`), así que un solo tool call
+# trabado congela TODO el bot, no solo esa acción. Esto fue lo que se vio como
+# "LIA se queda pegada" al pedir varios eventos de una vez.
+_HTTP_TIMEOUT_SECONDS = 20
+
+
 def build_service(creds: Credentials) -> Resource:
-    return build("calendar", "v3", credentials=creds, cache_discovery=False)
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_HTTP_TIMEOUT_SECONDS))
+    return build("calendar", "v3", http=http, cache_discovery=False)
 
 
 def _parse_event(raw: dict, calendar_id: str) -> CalendarEvent:
