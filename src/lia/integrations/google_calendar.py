@@ -67,8 +67,8 @@ def load_credentials(token_path: Path) -> Credentials:
             creds.refresh(Request())
         except RefreshError as exc:
             raise CalendarNotConnected(
-                "El acceso a Google Calendar expiró o fue revocado. Ejecuta "
-                "`uv run python scripts/google_auth.py` de nuevo para reconectarlo."
+                "El acceso a Google Calendar expiró o fue revocado. Manda /reconectar "
+                "y te paso un link para renovarlo desde el celular, sin SSH."
             ) from exc
         try:
             token_path.write_text(creds.to_json())

@@ -14,6 +14,11 @@ from lia.bot.ui import confirmation_keyboard, edit_formatted, reply_formatted
 from lia.config import Settings
 from lia.integrations.canvas import CanvasError, fetch_pending_assignments
 from lia.integrations.google_calendar import CalendarNotConnected, fetch_events
+from lia.integrations.google_device_auth import (
+    DeviceAuthError,
+    poll_for_credentials,
+    request_device_code,
+)
 from lia.integrations.google_tasks import fetch_tasks
 from lia.integrations.transcribe import TranscriptionError, transcribe_audio
 from lia.llm.base import PendingConfirmation
@@ -139,6 +144,47 @@ async def semana(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             events, week_start, pending_assignments, settings.timezone, google_tasks=tareas
         ),
     )
+
+
+async def reconectar_google(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Renueva token.json sin SSH: flujo OAuth para dispositivos (ver
+    integrations/google_device_auth.py). El usuario confirma desde el celular con
+    un código de un solo uso, en vez de correr el script a mano en el servidor."""
+    settings: Settings = context.bot_data["settings"]
+
+    try:
+        device = await request_device_code(settings.google_credentials_path)
+    except Exception as exc:
+        await reply_formatted(update.message, f"No pude iniciar la reconexión: {describe_error(exc)}")
+        return
+
+    url = device.get("verification_url") or device.get("verification_uri", "https://www.google.com/device")
+    minutos = device.get("expires_in", 1800) // 60
+    await reply_formatted(
+        update.message,
+        f"Abre {url} desde tu celular e ingresa este código:\n\n*{device['user_code']}*\n\n"
+        f"Tienes {minutos} minutos. Te aviso apenas quede listo.",
+    )
+
+    try:
+        creds = await poll_for_credentials(settings.google_credentials_path, device)
+    except DeviceAuthError as exc:
+        await reply_formatted(update.message, f"No se pudo renovar el acceso: {exc}")
+        return
+
+    try:
+        settings.google_token_path.write_text(creds.to_json())
+    except OSError:
+        logger.exception("No se pudo guardar el token renovado en %s", settings.google_token_path)
+        await reply_formatted(
+            update.message,
+            f"Google me dio el acceso pero no pude guardarlo en {settings.google_token_path} "
+            "(¿ruta de solo lectura o montaje distinto?), así que no quedó realmente "
+            "renovado — revisa el volumen del contenedor y vuelve a mandar /reconectar.",
+        )
+        return
+
+    await reply_formatted(update.message, "✅ Listo, el acceso a Google Calendar/Tasks quedó renovado.")
 
 
 async def _procesar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, texto: str) -> None:

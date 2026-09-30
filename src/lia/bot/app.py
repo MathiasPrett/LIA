@@ -38,6 +38,7 @@ def build_application(
     app.add_handler(CommandHandler("ping", handlers.ping, filters=owner_only))
     app.add_handler(CommandHandler("hoy", handlers.hoy, filters=owner_only))
     app.add_handler(CommandHandler("semana", handlers.semana, filters=owner_only))
+    app.add_handler(CommandHandler("reconectar", handlers.reconectar_google, filters=owner_only))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND & owner_only, handlers.mensaje_libre)
     )
