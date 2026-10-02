@@ -14,10 +14,13 @@ from lia.bot.ui import confirmation_keyboard, edit_formatted, reply_formatted
 from lia.config import Settings
 from lia.integrations.canvas import CanvasError, fetch_pending_assignments
 from lia.integrations.google_calendar import CalendarNotConnected, fetch_events
-from lia.integrations.google_device_auth import (
-    DeviceAuthError,
-    poll_for_credentials,
-    request_device_code,
+from lia.integrations.google_oauth_manual import (
+    OAuthError,
+    PendingAuth,
+    exchange_code,
+    extract_code,
+    looks_like_auth_response,
+    start_auth,
 )
 from lia.integrations.google_tasks import fetch_tasks
 from lia.integrations.transcribe import TranscriptionError, transcribe_audio
@@ -147,44 +150,59 @@ async def semana(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def reconectar_google(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Renueva token.json sin SSH: flujo OAuth para dispositivos (ver
-    integrations/google_device_auth.py). El usuario confirma desde el celular con
-    un código de un solo uso, en vez de correr el script a mano en el servidor."""
+    """Renueva token.json sin SSH (ver integrations/google_oauth_manual.py): manda el
+    enlace de autorización y espera que el usuario pegue de vuelta la URL final."""
     settings: Settings = context.bot_data["settings"]
 
     try:
-        device = await request_device_code(settings.google_credentials_path)
+        url, pending = start_auth(settings.google_credentials_path)
     except Exception as exc:
         await reply_formatted(update.message, f"No pude iniciar la reconexión: {describe_error(exc)}")
         return
 
-    url = device.get("verification_url") or device.get("verification_uri", "https://www.google.com/device")
-    minutos = device.get("expires_in", 1800) // 60
-    await reply_formatted(
-        update.message,
-        f"Abre {url} desde tu celular e ingresa este código:\n\n*{device['user_code']}*\n\n"
-        f"Tienes {minutos} minutos. Te aviso apenas quede listo.",
+    context.bot_data["pending_google_auth"] = pending
+    await update.message.reply_text(
+        "1. Abre este enlace y acepta los permisos (si sale 'app no verificada': "
+        "Avanzado → Continuar):\n\n"
+        f"{url}\n\n"
+        "2. Al terminar la página no va a cargar (dice 'localhost'). Es normal: copia la "
+        "URL completa de la barra de direcciones y pégamela aquí.\n\n"
+        "Tienes 15 minutos.",
+        disable_web_page_preview=True,
     )
 
+
+async def _completar_reconexion(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, pending: PendingAuth
+) -> None:
+    settings: Settings = context.bot_data["settings"]
+    context.bot_data.pop("pending_google_auth", None)
+
+    # El mensaje trae un código de autorización: lo borramos del chat.
     try:
-        creds = await poll_for_credentials(settings.google_credentials_path, device)
-    except DeviceAuthError as exc:
-        await reply_formatted(update.message, f"No se pudo renovar el acceso: {exc}")
+        await update.message.delete()
+    except Exception:
+        logger.debug("No se pudo borrar el mensaje con el código", exc_info=True)
+
+    try:
+        code = extract_code(update.message.text, pending)
+        creds = await exchange_code(settings.google_credentials_path, code)
+    except OAuthError as exc:
+        await update.message.chat.send_message(f"No se pudo renovar el acceso: {exc}")
         return
 
     try:
         settings.google_token_path.write_text(creds.to_json())
     except OSError:
         logger.exception("No se pudo guardar el token renovado en %s", settings.google_token_path)
-        await reply_formatted(
-            update.message,
+        await update.message.chat.send_message(
             f"Google me dio el acceso pero no pude guardarlo en {settings.google_token_path} "
             "(¿ruta de solo lectura o montaje distinto?), así que no quedó realmente "
-            "renovado — revisa el volumen del contenedor y vuelve a mandar /reconectar.",
+            "renovado — revisa el volumen del contenedor y vuelve a mandar /reconectar."
         )
         return
 
-    await reply_formatted(update.message, "✅ Listo, el acceso a Google Calendar/Tasks quedó renovado.")
+    await update.message.chat.send_message("✅ Listo, el acceso a Google Calendar/Tasks quedó renovado.")
 
 
 async def _procesar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, texto: str) -> None:
@@ -220,6 +238,15 @@ async def _procesar_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, te
 
 
 async def mensaje_libre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    pending: PendingAuth | None = context.bot_data.get("pending_google_auth")
+    if pending is not None:
+        if pending.expired():
+            context.bot_data.pop("pending_google_auth", None)
+        elif looks_like_auth_response(update.message.text):
+            # Intercepta antes del LLM: ni el código ni la URL deben llegar al
+            # modelo ni al historial.
+            await _completar_reconexion(update, context, pending)
+            return
     await _procesar_texto(update, context, update.message.text)
 
 
